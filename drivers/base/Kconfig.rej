@@ -1,0 +1,8 @@
+--- drivers/base/Kconfig
++++ drivers/base/Kconfig
+@@ -183,5 +183,4 @@
+          Create a miscdevice for the purposes of allowing userspace to create
+          and interact with locks created using genlock.
+ 
+-
+ endmenu
