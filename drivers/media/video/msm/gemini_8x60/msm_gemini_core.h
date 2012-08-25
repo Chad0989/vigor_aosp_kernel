@@ -30,6 +30,7 @@
 #define MSM_GEMINI_CORE_H
 
 #include <linux/interrupt.h>
+#include <linux/sched.h>
 #include "msm_gemini_hw.h"
 
 #define msm_gemini_core_buf msm_gemini_hw_buf

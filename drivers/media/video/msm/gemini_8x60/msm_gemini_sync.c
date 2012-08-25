@@ -75,7 +75,7 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 
-#include <media/msm_gemini.h>
+#include <media/msm_gemini_8x60.h>
 #include "msm_gemini_sync.h"
 #include "msm_gemini_core.h"
 #include "msm_gemini_platform.h"
@@ -468,7 +468,7 @@ int msm_gemini_fe_pingpong_irq(struct msm_gemini_device *pgmn_dev,
 	return rc;
 }
 
-int msm_gemini_input_get(struct msm_gemini_device *pgmn_dev, void __user * to)
+int msm_gemini_input_get(struct msm_gemini_device *pgmn_dev, void __user *to)
 {
 	struct msm_gemini_core_buf *buf_p;
 	struct msm_gemini_buf buf_cmd;

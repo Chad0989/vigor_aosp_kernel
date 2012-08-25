@@ -92,6 +92,8 @@ int msm_gemini_hw_pingpong_update(struct msm_gemini_hw_pingpong *pingpong_hw,
 		GMN_PR_ERR("%s:%d: pingpong buffer busy\n", __func__, __LINE__);
 		return -1;
 	}
+	pr_info("[CAM] %s is_fe=%d buf_free_index=%d paddr=0x%08x y_len=%d\n", __func__,
+		pingpong_hw->is_fe, buf_free_index, (int) buf->y_buffer_addr, buf->y_len);
 
 	pingpong_hw->buf[buf_free_index] = *buf;
 	pingpong_hw->buf_status[buf_free_index] = 1;

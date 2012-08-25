@@ -51,7 +51,7 @@ static int config_flash_gpio_table(enum msm_cam_flash_stat stat,
 			rc = gpio_request(msm_cam_flash_gpio_tbl[i][0],
 							  "CAM_FLASH_GPIO");
 			if (unlikely(rc < 0)) {
-				pr_err("%s not able to get gpio\n", __func__);
+				pr_err("[CAM] %s not able to get gpio\n", __func__);
 				for (i--; i >= 0; i--)
 					gpio_free(msm_cam_flash_gpio_tbl[i][0]);
 				break;
@@ -83,7 +83,7 @@ int msm_camera_flash_current_driver(
 		current_driver->driver_channel;
 	int num_leds = driver_channel->num_leds;
 
-	CDBG("%s: led_state = %d\n", __func__, led_state);
+	CDBG("[CAM] %s: led_state = %d\n", __func__, led_state);
 
 	/* Evenly distribute current across all channels */
 	switch (led_state) {
@@ -93,7 +93,7 @@ int msm_camera_flash_current_driver(
 				driver_channel->leds[idx].id, 0);
 			if (rc < 0)
 				pr_err(
-					"%s: FAIL name = %s, rc = %d\n",
+					"[CAM] %s: FAIL name = %s, rc = %d\n",
 					__func__,
 					driver_channel->leds[idx].name,
 					rc);
@@ -107,7 +107,7 @@ int msm_camera_flash_current_driver(
 				current_driver->low_current/num_leds);
 			if (rc < 0)
 				pr_err(
-					"%s: FAIL name = %s, rc = %d\n",
+					"[CAM] %s: FAIL name = %s, rc = %d\n",
 					__func__,
 					driver_channel->leds[idx].name,
 					rc);
@@ -121,7 +121,7 @@ int msm_camera_flash_current_driver(
 				current_driver->high_current/num_leds);
 			if (rc < 0)
 				pr_err(
-					"%s: FAIL name = %s, rc = %d\n",
+					"[CAM] %s: FAIL name = %s, rc = %d\n",
 					__func__,
 					driver_channel->leds[idx].name,
 					rc);
@@ -134,7 +134,7 @@ int msm_camera_flash_current_driver(
 	}
 #endif /* CONFIG_LEDS_PMIC8058 */
 
-	CDBG("msm_camera_flash_led_pmic8058: return %d\n", rc);
+	CDBG("[CAM] msm_camera_flash_led_pmic8058: return %d\n", rc);
 
 	return rc;
 }
@@ -152,7 +152,7 @@ static int msm_camera_flash_pwm(
 	if (!flash_pwm) {
 		flash_pwm = pwm_request(pwm->channel, "camera-flash");
 		if (flash_pwm == NULL || IS_ERR(flash_pwm)) {
-			pr_err("%s: FAIL pwm_request(): flash_pwm=%p\n",
+			pr_err("[CAM] %s: FAIL pwm_request(): flash_pwm=%p\n",
 			       __func__, flash_pwm);
 			flash_pwm = NULL;
 			return -ENXIO;
@@ -220,7 +220,7 @@ int msm_camera_flash_pmic(
 		rc = -EFAULT;
 		break;
 	}
-	CDBG("flash_set_led_state: return %d\n", rc);
+	CDBG("[CAM] flash_set_led_state: return %d\n", rc);
 
 	return rc;
 }
@@ -230,7 +230,7 @@ int32_t msm_camera_flash_set_led_state(
 {
 	int32_t rc = 0;
 
-	pr_info("flash_set_led_state: %d flash_sr_type=%d\n", led_state,
+	pr_info("[CAM] flash_set_led_state: %d flash_sr_type=%d\n", led_state,
 	    fdata->flash_src->flash_sr_type);
 
 	if (fdata->flash_type != MSM_CAMERA_FLASH_LED)
@@ -316,13 +316,13 @@ static int msm_strobe_flash_xenon_init(
 
 		rc = config_flash_gpio_table(MSM_CAM_FLASH_ON, sfdata);
 		if (rc < 0) {
-			pr_err("%s: gpio_request failed\n", __func__);
+			pr_err("[CAM] %s: gpio_request failed\n", __func__);
 			goto go_out;
 		}
 		rc = request_irq(sfdata->irq, strobe_flash_charge_ready_irq,
 			IRQF_TRIGGER_FALLING, "charge_ready", sfdata);
 		if (rc < 0) {
-			pr_err("%s: request_irq failed %d\n", __func__, rc);
+			pr_err("[CAM] %s: request_irq failed %d\n", __func__, rc);
 			goto go_out;
 		}
 
@@ -411,7 +411,7 @@ int msm_strobe_flash_ctrl(struct msm_camera_sensor_strobe_flash_data *sfdata,
 			rc = msm_strobe_flash_xenon_release(sfdata, 0);
 		break;
 	default:
-		pr_err("Invalid Strobe Flash State\n");
+		pr_err("[CAM] Invalid Strobe Flash State\n");
 		rc = -EINVAL;
 	}
 	return rc;
@@ -431,7 +431,7 @@ int msm_flash_ctrl(struct msm_camera_sensor_info *sdata,
 			&(flash_info->ctrl_data.strobe_ctrl));
 		break;
 	default:
-		pr_err("Invalid Flash MODE\n");
+		pr_err("[CAM] Invalid Flash MODE\n");
 		rc = -EINVAL;
 	}
 	return rc;

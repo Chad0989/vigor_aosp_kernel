@@ -64,12 +64,14 @@
 #include <linux/wakelock.h>
 #include <linux/slab.h>
 #include <media/msm_camera_sensor.h>
+#include <mach/gpio.h>
 #ifdef CONFIG_MSM_CAMERA_8X60
 #include <mach/camera-8x60.h>
+#elif defined(CONFIG_MSM_CAMERA_7X30)
+#include <mach/camera-7x30.h>
 #else
 #include <mach/camera.h>
 #endif
-#include <mach/gpio.h>
 #include <mach/vreg.h>
 #include <asm/mach-types.h>
 #include "ov8830.h"
@@ -89,22 +91,36 @@
 
 #define OV8830_VIDE_SIZE_DUMMY_PIXELS	0
 #define OV8830_VIDE_SIZE_DUMMY_LINES	0
+#if defined(CONFIG_MACH_RUNNYMEDE)
+#define OV8830_VIDEO_SIZE_WIDTH		1640
+#define OV8830_VIDEO_SIZE_HEIGHT	1232
+#define OV8830_VIDEO_SIZE_WIDTH_FAST   1632 /* 1632 */ /* 1640 */ /* 656 */
+#define OV8830_VIDEO_SIZE_HEIGHT_FAST   768 /* 768 */ /* 1232 */ /* 496 */
+#else
 #define OV8830_VIDEO_SIZE_WIDTH		3088
 #define OV8830_VIDEO_SIZE_HEIGHT	1736
-
 #define OV8830_VIDEO_SIZE_WIDTH_FAST   1640
 #define OV8830_VIDEO_SIZE_HEIGHT_FAST   916
-
+#endif
 
 #define OV8830_HRZ_QTR_BLK_PIXELS	1968
 #define OV8830_VER_QTR_BLK_LINES	36
 #define OV8830_HRZ_FULL_BLK_PIXELS	328  /*stella 1203*/
 #define OV8830_VER_FULL_BLK_LINES	36
+#if defined(CONFIG_MACH_RUNNYMEDE)
+#define OV8830_HRZ_VIDEO_BLK_PIXELS	1968
+#define OV8830_VER_VIDEO_BLK_LINES	36
+#define OV8830_HRZ_VIDEO_BLK_PIXELS_FAST  1976 /* 1976 */ /* 1968 */ /* 2952 */
+#define OV8830_VER_VIDEO_BLK_LINES_FAST    116 /* 116 */ /* 96 */ /* 168 */
+#else
 #define OV8830_HRZ_VIDEO_BLK_PIXELS	520
 #define OV8830_VER_VIDEO_BLK_LINES	149
 #define OV8830_HRZ_VIDEO_BLK_PIXELS_FAST  1968
-#define OV8830_VER_VIDEO_BLK_LINES_FAST     82
-  
+#define OV8830_VER_VIDEO_BLK_LINES_FAST		82
+#endif
+
+#define OV8830_MIN_COARSE_INTEGRATION_TIME 1
+#define OV8830_OFFSET				12
 
 static int cam_mode_sel = 0; /* 0: photo, 1: video@30fps, 2: video@24fps */
 /* 240: 26, 365: 24, 589: 21 */
@@ -115,13 +131,13 @@ const int ov8830_ver_qtr_blk_lines_array[] = {44, 44, 365};
 ==============================================================*/
 #define Q8				0x00000100
 
-/* Omnivision8810 product ID register address */
+/* Omnivision8830 product ID register address */
 #define OV8830_PIDH_REG			0x300A
 #define OV8830_PIDL_REG			0x300B
 
-/* Omnivision8810 product ID */
+/* Omnivision8830 product ID */
 #define OV8830_PID			0x88
-/* Omnivision8810 version */
+/* Omnivision8830 version */
 #define OV8830_VER			0x30
 
 /* Time in milisecs for waiting for the sensor to reset */
@@ -132,8 +148,8 @@ const int ov8830_ver_qtr_blk_lines_array[] = {44, 44, 365};
 /* Registers*/
 /* PLL Registers */
 #define REG_PRE_PLL_CLK_DIV		0x3011 /*0x0305*/
-#define REG_PLL_MULTIPLIER		0x3010	
-#define REG_VT_CLK_DIV			0x300E	/*[7:4]VT_SYS_DIV, [3-0]VT_PIX_DIV*/	
+#define REG_PLL_MULTIPLIER		0x3010
+#define REG_VT_CLK_DIV			0x300E	/*[7:4]VT_SYS_DIV, [3-0]VT_PIX_DIV*/
 #define REG_OP_CLK_DIV			0x300F	/*[7:4]OP_SYS_DIV, [3-0]OP_PIX_DIV*/
 
 /* ISP Enable Control */
@@ -163,8 +179,8 @@ const int ov8830_ver_qtr_blk_lines_array[] = {44, 44, 365};
 #define REG_EXTRA_VSYNC_WIDTH_MSB	0x301E
 #define REG_EXTRA_VSYNC_WIDTH_LSB	0x301F
 
-#define REG_VSYNC_WIDTH_MSB	0x380E  //px301E
-#define REG_VSYNC_WIDTH_LSB	0x380F  //0x301F
+#define REG_VSYNC_WIDTH_MSB	0x380E  /*px301E*/
+#define REG_VSYNC_WIDTH_LSB	0x380F  /*0x301F*/
 
 #define REG_X_ADDR_START_HIGH		0x3024
 #define REG_X_ADDR_START_LOW		0x3025
@@ -181,7 +197,7 @@ const int ov8830_ver_qtr_blk_lines_array[] = {44, 44, 365};
 #define OV8830_GAIN_MSB			0x350A
 #define OV8830_GAIN_LSB			0x350B
 
-#define OV8830_AEC_MSB_24	        0x3500 //easter for frame rate=10fps 20110526
+#define OV8830_AEC_MSB_24	        0x3500 /*easter for frame rate=10fps 20110526*/
 #define OV8830_AEC_MSB			0x3501
 #define OV8830_AEC_LSB			0x3502
 
@@ -301,7 +317,7 @@ static uint16_t ov8830_step_position_table[OV8830_TOTAL_STEPS_NEAR_TO_FAR+1];
 /*static uint32_t stored_line_length_ratio = 1 * Q8;*/
 
 static uint16_t write_cnt;
-//static uint16_t updated_BLC; /* only set to 0x50 after 1st update again*/
+/*static uint16_t updated_BLC;*/ /* only set to 0x50 after 1st update again*/
 
 uint8_t S3_to_0 = 0x1; /* 0x9 */
 
@@ -384,14 +400,14 @@ static int ov8830_i2c_rxdata(unsigned short saddr,
 		.buf   = rxdata,
 	},
 	};
-	CDBG("%s: saddr=0x%X\n", __func__, saddr);
-	CDBG("%s: raddr=0x%X\n", __func__, *rxdata);
+	CDBG("[CAM] %s: saddr=0x%X\n", __func__, saddr);
+	CDBG("[CAM] %s: raddr=0x%X\n", __func__, *rxdata);
 
 	if (i2c_transfer(ov8830_client->adapter, msgs, 2) < 0) {
 		pr_err("[CAM]ov8830_i2c_rxdata failed!\n");
 		return -EIO;
 	}
-	CDBG("%s: rxdata=0x%X\n", __func__, *rxdata);
+	CDBG("[CAM] %s: rxdata=0x%X\n", __func__, *rxdata);
 
 	return 0;
 }
@@ -433,7 +449,7 @@ retry:
 
 	if (rc < 0) {
 		pr_err("[CAM]ov8830_i2c_read 0x%x failed!\n", raddr);
-		printk(KERN_ERR "starting read retry policy count:%d\n", count);
+		pr_err("[CAM] starting read retry policy count:%d\n", count);
 		udelay(10);
 		count++;
 		if (count < 20) {
@@ -455,7 +471,7 @@ static int32_t ov8830_i2c_write_b(unsigned short saddr,
 	int32_t rc = -EFAULT;
 	unsigned char buf[3];
 	int count = 0;
-	CDBG("i2c_write_w_b, addr = 0x%x, val = 0x%x!\n", waddr, bdata);
+	CDBG("[CAM] i2c_write_w_b, addr = 0x%x, val = 0x%x!\n", waddr, bdata);
 
 	memset(buf, 0, sizeof(buf));
 	buf[0] = (waddr & 0xFF00) >> 8;
@@ -463,13 +479,13 @@ static int32_t ov8830_i2c_write_b(unsigned short saddr,
 	buf[2] = bdata;
 
 retry:
-	CDBG("i2c_write_b addr = %d, val = %d\n", waddr, bdata);
+	CDBG("[CAM] i2c_write_b addr = %d, val = %d\n", waddr, bdata);
 	rc = ov8830_i2c_txdata(saddr, buf, 3);
 
 	if (rc < 0) {
 		pr_err("[CAM]i2c_write_b failed, addr = 0x%x, val = 0x%x!\n",
 			 waddr, bdata);
-		pr_err(KERN_ERR "starting write_b retry policy count:%d\n", count);
+		pr_err(KERN_ERR "[CAM] starting read retry policy count:%d\n", count);
 		udelay(10);
 		count++;
 		if (count < 20) {
@@ -720,7 +736,7 @@ ov8830_move_focus(int direction, int32_t num_steps)
       next_lens_pos += (step_direction*small_step)) {
       rc = ov8830_go_to_position(next_lens_pos, ov8830_mode_mask);
       if (rc < 0) {
-      CDBG("ov8830_go_to_position Failed in Move Focus!!!\n");
+      CDBG("[CAM] ov8830_go_to_position Failed in Move Focus!!!\n");
       return rc;
       }
       curr_lens_pos = next_lens_pos;
@@ -791,7 +807,7 @@ static void ov8830_get_pict_fps(uint16_t fps, uint16_t *pfps)
 		preview_width =
 			OV8830_VIDEO_SIZE_WIDTH  + OV8830_HRZ_VIDEO_BLK_PIXELS;
 		preview_height =
-			OV8830_VIDEO_SIZE_HEIGHT + OV8830_VER_VIDEO_BLK_LINES;	
+			OV8830_VIDEO_SIZE_HEIGHT + OV8830_VER_VIDEO_BLK_LINES;
     } else if (ov8830_ctrl->prev_res == FAST_VIDEO_SIZE) {
     preview_width =
       OV8830_VIDEO_SIZE_WIDTH_FAST	+ OV8830_HRZ_VIDEO_BLK_PIXELS_FAST;
@@ -884,26 +900,28 @@ static uint32_t ov8830_get_pict_max_exp_lc(void)
 static int32_t ov8830_write_exp_gain
 			(uint16_t mul, uint16_t gain, uint32_t line)
 {
-	uint32_t aec_msb_24; //easter for frame rate=10fps 20110526
+	uint32_t aec_msb_24; /*easter for frame rate=10fps 20110526*/
 	uint16_t aec_msb;
 	uint16_t aec_lsb;
 	int32_t rc = 0;
 	uint32_t total_lines_per_frame;
 	uint32_t total_pixels_per_line;
+	uint16_t offset = OV8830_OFFSET;
 	/*uint32_t line_length_ratio = 1 * Q8;*/
-	/**uint8_t ov8830_offset = 2; */
-	//uint32_t extra_line_length = 0;
-	//uint16_t extra_line_msb = 0;
-	//uint16_t extra_line_lsb = 0;
+	/*uint8_t ov8830_offset = 2; */
+	/*uint32_t extra_line_length = 0;*/
+	/*uint16_t extra_line_msb = 0;*/
+	/*uint16_t extra_line_lsb = 0;*/
 	uint32_t phy_line = 0;
 	uint32_t phy_line_2 = 0;
 	uint8_t phy_mul = MUL_GAIN_INIT_VALUE;
 	uint16_t phy_gain = 0;
-	//uint32_t phy_extra_line_length = 0;
+	/*uint32_t phy_extra_line_length = 0;*/
 	uint16_t lf_msb;
 	uint16_t lf_lsb;
+	uint32_t fps_divider;
 
-	CDBG("%s start, mul = %d gain = %d line = %d\n", __func__,
+	CDBG("[CAM] %s start, mul = %d gain = %d line = %d\n", __func__,
 		mul, gain, line);
 
 	if (ov8830_ctrl->curr_res == QTR_SIZE) {
@@ -931,36 +949,28 @@ static int32_t ov8830_write_exp_gain
 	phy_line = line;
 	phy_mul = mul;
 	phy_gain = gain;
-	//phy_extra_line_length = extra_line_length;
+	/*phy_extra_line_length = extra_line_length;*/
 
 	if (ov8830_ctrl->sensormode == SENSOR_PREVIEW_MODE) {
+		fps_divider = ov8830_ctrl->fps_divider;
 		ov8830_ctrl->my_reg_gain = gain;
 		ov8830_ctrl->my_reg_dig_gain = mul;
 		ov8830_ctrl->my_reg_line_count = (uint16_t)line;
-	}
+	} else
+		fps_divider = ov8830_ctrl->pict_fps_divider;
 
-	//extra_line_msb = (uint16_t)(phy_extra_line_length & 0xFF00) >> 8;
-	//extra_line_lsb = (uint16_t)(phy_extra_line_length & 0x00FF);
+	/*extra_line_msb = (uint16_t)(phy_extra_line_length & 0xFF00) >> 8;*/
+	/*extra_line_lsb = (uint16_t)(phy_extra_line_length & 0x00FF);*/
 
-	if (phy_line * 0x400 <= (total_lines_per_frame - 12) * ov8830_ctrl->fps_divider) {
-		total_lines_per_frame = (total_lines_per_frame * ov8830_ctrl->fps_divider) / 0x400;
-		phy_line = (phy_line * ov8830_ctrl->fps_divider) / 0x400;
-		lf_msb = (uint16_t)((total_lines_per_frame) & 0xFF00) >> 8;
-		lf_lsb = (uint16_t)((total_lines_per_frame) & 0x00FF);
-	} else {
-		lf_msb = (uint16_t)((total_lines_per_frame + (phy_line - (total_lines_per_frame - 12))) & 0xFF00) >> 8;
-		lf_lsb = (uint16_t)((total_lines_per_frame + (phy_line - (total_lines_per_frame - 12))) & 0x00FF);
-	}
-
-	phy_line_2 = phy_line << 4;  //1995
-	aec_msb_24 = (uint32_t)(phy_line_2 & 0xFF0000) >> 16;//easter for frame rate=10fps 20110526
+	phy_line_2 = phy_line << 4;  /*1995*/
+	aec_msb_24 = (uint32_t)(phy_line_2 & 0xFF0000) >> 16;/*easter for frame rate=10fps 20110526*/
 	aec_msb = (uint16_t)(phy_line_2 & 0xFF00) >> 8;
 	aec_lsb = (uint16_t)(phy_line_2 & 0x00FF);
 
 
 	rc = ov8830_i2c_write_b(ov8830_client->addr, OV8830_AEC_MSB_24, (uint8_t)aec_msb_24);
 	if (rc < 0)
-		return rc;//easter for frame rate=10fps 20110526
+		return rc;/*easter for frame rate=10fps 20110526*/
 
 	rc = ov8830_i2c_write_b(ov8830_client->addr, OV8830_AEC_MSB, (uint8_t)aec_msb);
 	if (rc < 0)
@@ -973,6 +983,15 @@ static int32_t ov8830_write_exp_gain
   rc = ov8830_i2c_write_b(ov8830_client->addr, OV8830_GAIN_LSB, (uint8_t)phy_gain);
 	if (rc < 0)
 		return rc;
+
+	if (phy_line * 0x400 <= (total_lines_per_frame - offset) * fps_divider) {
+		total_lines_per_frame = (total_lines_per_frame * fps_divider) / 0x400;
+		lf_msb = (uint16_t)((total_lines_per_frame) & 0xFF00) >> 8;
+		lf_lsb = (uint16_t)((total_lines_per_frame) & 0x00FF);
+	} else {
+		lf_msb = (uint16_t)((total_lines_per_frame + (phy_line - (total_lines_per_frame - offset))) & 0xFF00) >> 8;
+		lf_lsb = (uint16_t)((total_lines_per_frame + (phy_line - (total_lines_per_frame - offset))) & 0x00FF);
+	}
 
 	rc = ov8830_i2c_write_b(ov8830_client->addr, REG_VSYNC_WIDTH_MSB, (uint8_t)lf_msb);
 	if (rc < 0)
@@ -995,6 +1014,34 @@ static int32_t ov8830_set_pict_exp_gain
 	rc = ov8830_write_exp_gain(mul, gain, line);
 	return rc;
 } /* endof ov8830_set_pict_exp_gain*/
+
+static int32_t ov8830_set_fps(struct fps_cfg *fps)
+{
+	int32_t rc = 0;
+	uint32_t delay;
+	uint32_t min_coarse = OV8830_MIN_COARSE_INTEGRATION_TIME;
+	uint32_t pre_fps_divider = ov8830_ctrl->fps_divider;
+	uint32_t pre_fps = ov8830_ctrl->fps;
+	ov8830_ctrl->fps_divider = fps->fps_div;
+	ov8830_ctrl->pict_fps_divider = fps->pict_fps_div;
+	ov8830_ctrl->fps = fps->f_mult;
+
+	if (ov8830_ctrl->sensormode == SENSOR_PREVIEW_MODE &&
+		(ov8830_ctrl->my_reg_gain != 0 || ov8830_ctrl->my_reg_line_count != 0) &&
+		(pre_fps != ov8830_ctrl->fps || pre_fps_divider != ov8830_ctrl->fps_divider)) {
+		min_coarse = (min_coarse * ov8830_ctrl->fps_divider + 0x400 - 1) / 0x400;
+		if (ov8830_ctrl->my_reg_line_count < min_coarse)
+			ov8830_ctrl->my_reg_line_count = min_coarse;
+		rc =
+			ov8830_write_exp_gain(ov8830_ctrl->my_reg_dig_gain, ov8830_ctrl->my_reg_gain,
+				ov8830_ctrl->my_reg_line_count);
+
+		delay = (1000 * Q8 / pre_fps) + 1;
+		mdelay(delay);
+	}
+
+	return rc;
+}
 
 /* remove test code */
 #if 0
@@ -1033,24 +1080,6 @@ static int32_t ov8830_test(enum ov8830_test_mode_t mo)
 
 }
 #endif
-
-static int32_t ov8830_set_fps(struct fps_cfg *fps)
-{
-	int32_t rc = 0;
-	uint32_t pre_fps = ov8830_ctrl->fps_divider;
-	ov8830_ctrl->fps_divider = fps->fps_div;
-	ov8830_ctrl->pict_fps_divider = fps->pict_fps_div;
-	ov8830_ctrl->fps = fps->f_mult;
-
-	if (ov8830_ctrl->sensormode == SENSOR_PREVIEW_MODE &&
-		(ov8830_ctrl->my_reg_gain != 0 || ov8830_ctrl->my_reg_line_count != 0)) {
-		rc =
-			ov8830_write_exp_gain(ov8830_ctrl->my_reg_dig_gain, ov8830_ctrl->my_reg_gain,
-				ov8830_ctrl->my_reg_line_count * pre_fps / ov8830_ctrl->fps_divider);
-	}
-
-	return rc;
-}
 
 
 uint32_t Crc32CheckSumByte(uint8_t *pData, uint32_t uiLen, uint32_t preValue)
@@ -1142,7 +1171,7 @@ static int32_t HTC_update_ov8830_lsc_registers(void)
 	awb_lsc_data_ptr = (struct awb_lsc_struct_type *)get_cam_awb_cal();
 
 	for (i = 0; i < 8; i++) {
-		pr_info(KERN_INFO"[LSC calibration]  read AWB table 0x%x\n",
+		pr_info(KERN_INFO"[CAM][LSC calibration]  read AWB table 0x%x\n",
 			awb_lsc_data_ptr->caBuff[i]);
 	}
 
@@ -1210,10 +1239,10 @@ static int32_t initialize_ov8830_registers(void)
 static int32_t ov8830_setting(int rt)
 {
 	int32_t rc = 0;
-	//int32_t i, array_length;
+	/*int32_t i, array_length;*/
 	static int16_t did_snapshot;
-	//uint16_t ori_reg_mul_gain;
-	//uint8_t ori_reg_mul_gain_8bit;
+	/*uint16_t ori_reg_mul_gain;*/
+	/*uint8_t ori_reg_mul_gain_8bit;*/
 	struct msm_camera_csi_params ov8830_csi_params;
 	struct msm_camera_sensor_info *sinfo = ov8830_pdev->dev.platform_data;
 
@@ -1235,8 +1264,8 @@ static int32_t ov8830_setting(int rt)
 			pr_info("[CAM]after set csi config\n");
 		}
 	}
-  
-	pr_info("[CAM]ov8830_setting,rt=%d\n",rt);
+
+	pr_info("[CAM]ov8830_setting,rt=%d\n", rt);
 
 	switch (rt) {
 
@@ -1244,12 +1273,12 @@ static int32_t ov8830_setting(int rt)
 	case VIDEO_SIZE:
 	case FAST_VIDEO_SIZE:
 
-    rc = ov8830_i2c_write_table( ov8830_regs.common_mipi, ov8830_regs.common_mipi_size);
-  
+    rc = ov8830_i2c_write_table(ov8830_regs.common_mipi, ov8830_regs.common_mipi_size);
+
     if (rc < 0)
       return rc;
 
-		if(rt == VIDEO_SIZE) {
+		if (rt == VIDEO_SIZE) {
 			pr_info("[CAM]ov8830_setting(VIDEO_SIZE)\n");
 			rc = ov8830_i2c_write_table(ov8830_regs.video_mipi, ov8830_regs.video_mipi_size);
 		} else if (rt == FAST_VIDEO_SIZE) {
@@ -1260,13 +1289,12 @@ static int32_t ov8830_setting(int rt)
 			rc = ov8830_i2c_write_table(ov8830_regs.qtr_mipi, ov8830_regs.qtr_mipi_size);
 		}
 
-    if (rc < 0)
-    {
-        pr_info("[CAM]fail,QTR_SIZE\n");
-        return rc;
+    if (rc < 0) {
+			pr_info("[CAM]fail,QTR_SIZE\n");
+			return rc;
     }
 
-		if(rt == VIDEO_SIZE) {
+		if (rt == VIDEO_SIZE) {
 			ov8830_ctrl->curr_res = VIDEO_SIZE;
 		} else if (rt == FAST_VIDEO_SIZE) {
 			ov8830_ctrl->curr_res = FAST_VIDEO_SIZE;
@@ -1280,28 +1308,24 @@ static int32_t ov8830_setting(int rt)
 			ov8830_write_exp_gain(ov8830_ctrl->my_reg_dig_gain,
 				ov8830_ctrl->my_reg_gain, ov8830_ctrl->my_reg_line_count);
 
-		//streaming on
+		/*streaming on*/
 		rc = ov8830_i2c_write_b(ov8830_client->addr,
 		0x0100, 0x01);
 		if (rc < 0)
 			return rc;
 
-		if (sinfo->mirror_mode)
-		{
-			if (rt == QTR_SIZE || rt == FAST_VIDEO_SIZE)
-			{
+		if (sinfo->mirror_mode) {
+			if (rt == QTR_SIZE || rt == FAST_VIDEO_SIZE) {
 				rc = ov8830_i2c_write_b(ov8830_client->addr,
-				OV8830_REG_MODE_FLIP, OV8830_REG_FLIP+1);  //+1 for binning
+				OV8830_REG_MODE_FLIP, OV8830_REG_FLIP+1);  /*+1 for binning*/
 				if (rc < 0)
 					return rc;
 
 				rc = ov8830_i2c_write_b(ov8830_client->addr,
-				OV8830_REG_MODE_MIRROR, OV8830_REG_MIRROR+1); //+1 for binning
+				OV8830_REG_MODE_MIRROR, OV8830_REG_MIRROR+1); /*+1 for binning*/
 				if (rc < 0)
 					return rc;
-			}
-			else
-			{
+			} else {
 				rc = ov8830_i2c_write_b(ov8830_client->addr,
 				OV8830_REG_MODE_FLIP, OV8830_REG_FLIP);
 				if (rc < 0)
@@ -1315,23 +1339,22 @@ static int32_t ov8830_setting(int rt)
 		}
 
 		did_snapshot = 0;
-		
+
 		break;
 
 	case FULL_SIZE:
 
     pr_info("[CAM]ov8830_setting FULL_SIZE\n");
 
-    rc = ov8830_i2c_write_table( ov8830_regs.common_mipi, ov8830_regs.common_mipi_size);
-  
+    rc = ov8830_i2c_write_table(ov8830_regs.common_mipi, ov8830_regs.common_mipi_size);
+
     if (rc < 0)
       return rc;
 
     rc = ov8830_i2c_write_table(ov8830_regs.full_mipi, ov8830_regs.full_mipi_size);
-    if (rc < 0)
-    {
-        pr_info("[CAM]fail\n");
-        return rc;
+    if (rc < 0) {
+			pr_info("[CAM]fail\n");
+			return rc;
     }
 
 		ov8830_ctrl->curr_res = FULL_SIZE;
@@ -1342,14 +1365,13 @@ static int32_t ov8830_setting(int rt)
 			ov8830_write_exp_gain(ov8830_ctrl->my_reg_dig_gain,
 				ov8830_ctrl->my_reg_gain, ov8830_ctrl->my_reg_line_count);
 
-		//streaming on
+		/*streaming on*/
 		rc = ov8830_i2c_write_b(ov8830_client->addr,
 		0x0100, 0x01);
 		if (rc < 0)
 			return rc;
 
-		if (sinfo->mirror_mode)
-		{
+		if (sinfo->mirror_mode) {
 			rc = ov8830_i2c_write_b(ov8830_client->addr,
 			OV8830_REG_MODE_FLIP, OV8830_REG_FLIP);
 			if (rc < 0)
@@ -1411,26 +1433,24 @@ static int32_t ov8830_video_config(int mode)
     uint32_t curr_mode = ov8830_ctrl->sensormode;
 
     ov8830_ctrl->sensormode = mode;
-  
-    pr_info("[CAM]%s cam_mode_sel %d cur_sel %d \n", __func__, cam_mode_sel, 
-  cur_sel);
-  
+
+    pr_info("[CAM]%s cam_mode_sel %d cur_sel %d \n", __func__, cam_mode_sel, cur_sel);
+
     preview_frame_count = 0;
-  
+
     if (ov8830_ctrl->curr_res != ov8830_ctrl->prev_res
       || pre_sel != cur_sel
       )  {
-           rc = ov8830_setting(ov8830_ctrl->prev_res);
-           if (rc < 0) {
-                   ov8830_ctrl->curr_res = curr_res;
-                   ov8830_ctrl->sensormode = curr_mode;
-                   return rc;
-           }
-  
+				rc = ov8830_setting(ov8830_ctrl->prev_res);
+				if (rc < 0) {
+					ov8830_ctrl->curr_res = curr_res;
+					ov8830_ctrl->sensormode = curr_mode;
+					return rc;
+				}
     } else {
-           ov8830_ctrl->curr_res = ov8830_ctrl->prev_res;
+				ov8830_ctrl->curr_res = ov8830_ctrl->prev_res;
     }
-  
+
     pre_sel = cur_sel;
 
     return rc;
@@ -1547,7 +1567,7 @@ static int ov8830_probe_read_id(const struct msm_camera_sensor_info *data)
 	}
 
 	pr_info("[CAM]%s, vreg_get vreg_af_actuator\n", __func__);
-	//vreg_af_actuator = vreg_get(0, "gp5");
+	/*vreg_af_actuator = vreg_get(0, "gp5");*/
 	if (IS_ERR(vreg_af_actuator))
 		return PTR_ERR(vreg_af_actuator);
 
@@ -1625,8 +1645,9 @@ static int ov8830_sensor_open_init(struct msm_camera_sensor_info *data)
 	pr_info("[CAM]%s  add open retry policy !!!\n", __func__);
 retry:
 	rc = ov8830_vreg_enable(ov8830_pdev);
-	if (rc < 0)
+	if (rc < 0) {
 		pr_err("[CAM]fail,__ov8830_probe rc < 0\n");
+	}
 
 	/*PWD and RST config*/
 	pr_info("[CAM]%s, GPIO(%d) sensor_pwd 0\n", __func__, data->sensor_pwd);
@@ -1645,7 +1666,7 @@ retry:
 	}
 	msleep(5);
 
-	if(data->camera_clk_switch != NULL)
+	if (data->camera_clk_switch != NULL)
 		data->camera_clk_switch();
 	mdelay(5);
 
@@ -1670,9 +1691,9 @@ retry:
 	/*set MCLK*/
 	pr_info("[CAM]%s, msm_camio_clk_rate_set %d\n",
 		__func__, OV8830_DEFAULT_CLOCK_RATE);
-  
+
        msm_camio_clk_rate_set(OV8830_DEFAULT_CLOCK_RATE);
-       
+
 	msleep(10);
 
 	if (data->vcm_pwd) {
@@ -1701,6 +1722,9 @@ retry:
 	}
 
 	ov8830_ctrl->sensormode = SENSOR_PREVIEW_MODE ;
+
+	if (rc < 0)
+		goto init_fail;
 
 	pr_info("[CAM]%s, enable AF actuator %d\n", __func__, __LINE__);
 
@@ -1737,7 +1761,7 @@ retry:
 	    /* reset the driver state */
 init_fail:
 	pr_err("[CAM]%s: init_fail\n", __func__);
-	//vreg_disable(vreg_af_actuator);
+	/*vreg_disable(vreg_af_actuator);*/
 	if (ov8830_ctrl) {
 		kfree(ov8830_ctrl);
 		ov8830_ctrl = NULL;
@@ -1797,7 +1821,7 @@ static int ov8830_vreg_disable(struct platform_device *pdev)
 {
 	struct msm_camera_sensor_info *sdata = pdev->dev.platform_data;
 	int rc;
-	printk(KERN_INFO "%s camera vreg off\n", __func__);
+	pr_info("[CAM] %s camera vreg off\n", __func__);
 	if (sdata->camera_power_off == NULL) {
 		pr_err("[CAM]sensor platform_data didnt register\n");
 		return -EIO;
@@ -1826,7 +1850,7 @@ static int ov8830_probe_init_done(const struct msm_camera_sensor_info *data)
 	mdelay(1);
 
   if (data->vcm_pwd) {
-    rc = gpio_request(data->vcm_pwd, "ov8810");
+    rc = gpio_request(data->vcm_pwd, "ov8830");
     if (!rc)
       gpio_direction_output(data->vcm_pwd, 0);
     else
@@ -1834,12 +1858,12 @@ static int ov8830_probe_init_done(const struct msm_camera_sensor_info *data)
     gpio_free(data->vcm_pwd);
   }
   mdelay(1);
-  
+
 
   data->pdata->camera_gpio_off();
   mdelay(1);
 
-  pr_info("data->power_down_disable=%d",data->power_down_disable);
+  pr_info("[CAM] data->power_down_disable=%d", data->power_down_disable);
   if (!data->power_down_disable) {
     ov8830_vreg_disable(ov8830_pdev);
   }
@@ -1859,7 +1883,7 @@ static int ov8830_suspend(struct platform_device *pdev, pm_message_t state)
 	pr_info("[CAM]ov8830: camera suspend\n");
 
 	pr_info("[CAM]%s, vreg_af_actuator vreg_disable\n", __func__);
-	//vreg_disable(vreg_af_actuator);
+	/*vreg_disable(vreg_af_actuator);*/
 
 	rc = gpio_request(sinfo->sensor_reset, "ov8830");
 	if (!rc)
@@ -1895,7 +1919,7 @@ static void ov8830_resume(struct early_suspend *handler)
 
 	/*check whether already suspend*/
 	if (ov8830_event.waked_up == 1) {
-		pr_info("[CAM]Ov8810: No nesesary to do Resume\n");
+		pr_info("[CAM]Ov8830: No nesesary to do Resume\n");
 		return;
 	}
 
@@ -1958,6 +1982,7 @@ static int __exit ov8830_i2c_remove(struct i2c_client *client)
 	deinit_suspend();
 	ov8830_client = NULL;
 	kfree(sensorw);
+	sensorw = NULL;
 	return 0;
 }
 
@@ -1977,16 +2002,16 @@ static struct early_suspend early_suspend_ov8830 = {
 	.suspend = NULL,
 };
 
-static const char *Ov8810Vendor = "OmniVision";
-static const char *Ov8810NAME = "ov8830";
-static const char *Ov8810Size = "8M";
+static const char *Ov8830Vendor = "OmniVision";
+static const char *Ov8830NAME = "ov8830";
+static const char *Ov8830Size = "8M";
 
 static ssize_t sensor_vendor_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	ssize_t ret = 0;
 
-	sprintf(buf, "%s %s %s\n", Ov8810Vendor, Ov8810NAME, Ov8810Size);
+	sprintf(buf, "%s %s %s\n", Ov8830Vendor, Ov8830NAME, Ov8830Size);
 	ret = strlen(buf) + 1;
 
 	return ret;
@@ -2039,7 +2064,7 @@ static int ov8830_sysfs_init(void)
 		ret = -ENOMEM;
 		return ret ;
 	}
-	pr_info("[CAM]Ov8810:sysfs_create_file\n");
+	pr_info("[CAM]ov8830:sysfs_create_file\n");
 	ret = sysfs_create_file(android_ov8830, &dev_attr_sensor.attr);
 	if (ret) {
 		pr_info("[CAM]ov8830_sysfs_init: sysfs_create_file failed\n");
@@ -2091,7 +2116,7 @@ int ov8830_sensor_config(void __user *argp)
 
 	down(&ov8830_sem);
 
-	CDBG("ov8830_sensor_config: cfgtype = %d\n",
+	CDBG("[CAM] ov8830_sensor_config: cfgtype = %d\n",
 	  cdata.cfgtype);
 		switch (cdata.cfgtype) {
 		case CFG_GET_PICT_FPS:
@@ -2283,14 +2308,16 @@ static int ov8830_sensor_release(void)
 
 
 /*HTC_START Horng 20110905*/
+#ifdef CONFIG_MSM_CAMERA_8X60
 	msm_mipi_csi_disable();
+#endif
 /*HTC_END*/
 
 
 	rc = ov8830_common_deinit();
 
 	msleep(20);
-	
+
 	allow_suspend();
 	pr_info("[CAM]ov8830_release completed\n");
 	up(&ov8830_sem);
@@ -2316,15 +2343,14 @@ static int ov8830_sensor_probe(struct msm_camera_sensor_info *info,
 	sensor_probe_node = s->node;
 	/*switch pclk and mclk between main cam and 2nd cam*/
 	/*only for supersonic*/
-	pr_info("[CAM]Ov8810: doing clk switch (ov8830)\n");
+	pr_info("[CAM]ov8830: doing clk switch (ov8830)\n");
 
   rc = ov8830_vreg_enable(ov8830_pdev);
-	if (rc < 0)
-  { 
+	if (rc < 0) {
 		pr_err("[CAM]__ov8830_probe rc < 0\n");
 	}
 
-	if(info->camera_clk_switch != NULL)
+	if (info->camera_clk_switch != NULL)
 		info->camera_clk_switch();
 	mdelay(5);
 
@@ -2350,25 +2376,26 @@ static int ov8830_sensor_probe(struct msm_camera_sensor_info *info,
 	/*set MCLK*/
 	pr_info("[CAM]%s, msm_camio_clk_rate_set %d\n",
 		__func__, OV8830_DEFAULT_CLOCK_RATE);
-  
+
        msm_camio_clk_rate_set(OV8830_DEFAULT_CLOCK_RATE);
-       
+
 	msleep(100);
 	/*read sensor id*/
 	rc = ov8830_probe_read_id(info);
 
-  if (rc < 0)
-  { 
+  if (rc < 0) {
 		goto probe_fail;
-   }
-  
+  }
+
 	/* Initialize Sensor registers */
 	rc = initialize_ov8830_registers();
 	if (rc < 0)
 		return rc;
 
+/*
 	if (info->camera_main_set_probe != NULL)
 		info->camera_main_set_probe(true);
+*/
 
 #if 1 /* Get OTP fuse id for OV sensor*/
 ov8830_i2c_write_b(ov8830_client->addr, 0x3d84, 0xc0);
@@ -2423,19 +2450,22 @@ probe_done:
 
 static int __ov8830_probe(struct platform_device *pdev)
 {
-	
+/*
 	struct msm_camera_sensor_info *sdata = pdev->dev.platform_data;
-	printk("[CAM]__ov8830_probe\n");
+*/
+	pr_info("[CAM]__ov8830_probe\n");
 	ov8830_pdev = pdev;
 
+/*
 	if (sdata->camera_main_get_probe != NULL) {
 		if (sdata->camera_main_get_probe()) {
 			pr_info("[CAM]__ov8830_probe camera main get probed already.\n");
 			return 0;
 		}
 	}
+*/
 
-	return msm_camera_drv_start(pdev, ov8830_sensor_probe);  //msm_camera_drv_start(pdev, ov8830_sensor_probe)
+	return msm_camera_drv_start(pdev, ov8830_sensor_probe);  /*msm_camera_drv_start(pdev, ov8830_sensor_probe)*/
 }
 
 static struct platform_driver msm_camera_driver = {

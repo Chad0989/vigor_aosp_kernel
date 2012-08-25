@@ -27,6 +27,7 @@
 #include <linux/clk.h>
 #include <mach/clk.h>
 #include <asm/div64.h>
+#include <mach/board_htc.h>
 
 static int vpe_update_scaler(struct video_crop_t *pcrop);
 static struct vpe_device_type  vpe_device_data;
@@ -98,9 +99,17 @@ static long long vpe_do_div(long long num, long long den)
 
 static int vpe_start(void)
 {
+#ifdef CONFIG_CAMERA_3D
+	struct msm_sync *sync = (struct msm_sync *)vpe_ctrl->syncdata;
+#endif
 	/*  enable the frame irq, bit 0 = Display list 0 ROI done */
 	msm_io_w(1, vpe_device->vpebase + VPE_INTR_ENABLE_OFFSET);
-	msm_io_dump(vpe_device->vpebase + 0x10000, 0x250);
+#ifdef CONFIG_CAMERA_3D
+	if ((atomic_read(&sync->stereo_snap_state) == STEREO_SNAP_BUFFER1_PROCESSING) ||
+		(atomic_read(&sync->stereo_snap_state) == STEREO_SNAP_BUFFER2_PROCESSING))
+#endif
+		msm_io_dump(vpe_device->vpebase + 0x10000, 0x250);
+
 	/* this triggers the operation. */
 	msm_io_w(1, vpe_device->vpebase + VPE_DL0_START_OFFSET);
 
@@ -478,6 +487,9 @@ static int vpe_update_scaler_with_dis(struct video_crop_t *pcrop,
 	uint32_t scale_unit_sel_x, scale_unit_sel_y;
 	uint64_t numerator, denominator;
 	int32_t  zoom_dis_x, zoom_dis_y;
+#ifdef CONFIG_CAMERA_3D
+	uint32_t temp_w = 0, temp_h = 0;
+#endif
 
 	CDBG("[CAM] %s: pcrop->in2_w = %d, pcrop->in2_h = %d\n", __func__,
 		 pcrop->in2_w, pcrop->in2_h);
@@ -506,9 +518,8 @@ static int vpe_update_scaler_with_dis(struct video_crop_t *pcrop,
 	/* If fall through then scaler is needed.*/
 
 	/* calculate only offset when zooming */
-	if (vpe_ctrl->output_type == OUTPUT_TYPE_ST_R) {
+	if (vpe_ctrl->output_type == OUTPUT_TYPE_ST_R)
 		dis_offset->dis_offset_x -= vpe_ctrl->out_w;
-	}
 
 	CDBG("[CAM] ========VPE zoom needed + DIS enabled.\n");
 	/* assumption is both direction need zoom. this can be
@@ -528,13 +539,38 @@ static int vpe_update_scaler_with_dis(struct video_crop_t *pcrop,
 			pcrop->in2_h / pcrop->out2_h;
 		src_x = zoom_dis_x + (pcrop->out2_w-pcrop->in2_w)/2;
 		src_y = zoom_dis_y + (pcrop->out2_h-pcrop->in2_h)/2;
-	}else{
+	} else {
+#ifdef CONFIG_CAMERA_3D
+		if (atomic_read(&sync->stereo_snap_state) ==
+			STEREO_SNAP_BUFFER1_PROCESSING) {
+			temp_w = 864;
+			temp_h = 490;
+		} else if (atomic_read(&sync->stereo_snap_state) ==
+			STEREO_SNAP_BUFFER2_PROCESSING) {
+			temp_w = 1728;
+			temp_h = 972;
+		}
+		zoom_dis_x = dis_offset->dis_offset_x *
+			pcrop->in2_w / temp_w;
+		zoom_dis_y = dis_offset->dis_offset_y *
+			pcrop->in2_h / temp_h;
+		src_x = zoom_dis_x + (((temp_w - pcrop->in2_w) / 2) * 17 / 20);
+		src_y = zoom_dis_y + (temp_h - pcrop->in2_h)/2;
+#else
 		zoom_dis_x = dis_offset->dis_offset_x ;
 		zoom_dis_y = dis_offset->dis_offset_y;
 		src_x = zoom_dis_x;
 		src_y = zoom_dis_y;
+#endif
 	}
 
+#ifdef CONFIG_CAMERA_3D
+	CDBG("%s: [DEBUG] temp w = %d, h = %d\n", __func__, temp_w, temp_h);
+
+	CDBG("%s: [DEBUG] zoom_dis x = %d, y = %d\n", __func__, zoom_dis_x,
+		zoom_dis_y);
+	CDBG("%s: [DEBUG] src x = %d, y = %d\n", __func__, src_x, src_y);
+#endif
 
 	out_ROI_width = vpe_ctrl->out_w;
 	out_ROI_height = vpe_ctrl->out_h;
@@ -559,9 +595,8 @@ static int vpe_update_scaler_with_dis(struct video_crop_t *pcrop,
 	CDBG("[CAM] src_x = %d, src_y=%d.\n", src_x, src_y);
 
 	/* add back out_w when calculating address */
-	if (vpe_ctrl->output_type == OUTPUT_TYPE_ST_R) {
+	if (vpe_ctrl->output_type == OUTPUT_TYPE_ST_R)
 		src_x += vpe_ctrl->out_w;
-	}
 
 	src_xy = src_y*(1<<16) + src_x;
 	msm_io_w(src_xy, vpe_device->vpebase +
@@ -723,7 +758,7 @@ void msm_send_frame_to_vpe(uint32_t pyaddr, uint32_t pcbcraddr,
 	msm_io_w(pyaddr, vpe_device->vpebase + VPE_SRCP0_ADDR_OFFSET);
 	msm_io_w(pcbcraddr, vpe_device->vpebase + VPE_SRCP1_ADDR_OFFSET);
 	if (vpe_ctrl->state == 1)
-		printk(" =====VPE is busy!!!  Wrong!========\n");
+		pr_err("[CAM] =====VPE is busy!!!  Wrong!========\n");
 
 	if (output_type != OUTPUT_TYPE_ST_R)
 		vpe_ctrl->ts = *ts;
@@ -894,14 +929,14 @@ static int vpe_proc_general(struct msm_vpe_cmd *cmd)
 		break;
 	}
 vpe_proc_general_done:
-	if (cmdp) kfree(cmdp);
+	kfree(cmdp);
 	return rc;
 }
 
 static void vpe_addr_convert(struct msm_vpe_phy_info *pinfo,
 	enum vpe_resp_msg type, void *data, void **ext, int32_t *elen)
 {
-	//uint8_t outid;
+	/* uint8_t outid; */
 	switch (type) {
 	case VPE_MSG_OUTPUT_V:
 	case VPE_MSG_OUTPUT_ST_R:
@@ -912,7 +947,7 @@ static void vpe_addr_convert(struct msm_vpe_phy_info *pinfo,
 			pinfo->output_id = OUTPUT_TYPE_ST_R;
 
 		CDBG("[CAM] In vpe_addr_convert output_id = %d \n", pinfo->output_id);
-		//pinfo->output_id = outid;
+		/* pinfo->output_id = outid; */
 		pinfo->y_phy =
 			((struct vpe_message *)data)->_u.msgOut.yBuffer;
 		pinfo->cbcr_phy =
@@ -1030,6 +1065,40 @@ int msm_vpe_config(struct msm_vpe_cfg_cmd *cmd, void *data)
 	return rc;
 }
 
+#ifdef CONFIG_CAMERA_3D
+void msm_vpe_offset_update(int frame_pack, uint32_t pyaddr, uint32_t pcbcraddr,
+	struct timespec *ts, int output_id, struct msm_st_half st_half,
+	int frameid)
+{
+	struct msm_vpe_buf_info vpe_buf;
+
+#ifdef NO_EXTRA_C2D_BUF
+	uint32_t input_stride;
+#endif
+
+	vpe_buf.vpe_crop.in2_w = st_half.stCropInfo.in_w;
+	vpe_buf.vpe_crop.in2_h = st_half.stCropInfo.in_h;
+	vpe_buf.vpe_crop.out2_w = st_half.stCropInfo.out_w;
+	vpe_buf.vpe_crop.out2_h = st_half.stCropInfo.out_h;
+	vpe_ctrl->dis_offset.dis_offset_x = st_half.pix_x_off;
+	vpe_ctrl->dis_offset.dis_offset_y = st_half.pix_y_off;
+	vpe_ctrl->dis_offset.frame_id = frameid;
+	vpe_ctrl->frame_pack = frame_pack;
+	vpe_ctrl->output_type = output_id;
+
+#ifdef NO_EXTRA_C2D_BUF
+	input_stride = (st_half.buf_cbcr_stride * (1<<16)) +
+		st_half.buf_y_stride;
+
+	msm_io_w(input_stride, vpe_device->vpebase + VPE_SRC_YSTRIDE1_OFFSET);
+#endif
+
+	vpe_update_scaler_with_dis(&(vpe_buf.vpe_crop),
+		&(vpe_ctrl->dis_offset));
+
+	msm_send_frame_to_vpe(pyaddr, pcbcraddr, ts, output_id);
+}
+#else
 void msm_vpe_offset_update(int frame_pack, uint32_t pyaddr, uint32_t pcbcraddr,
 	struct timespec *ts, int output_id, int32_t x, int32_t y,
 	int32_t frameid, struct msm_st_crop stCropInfo)
@@ -1052,6 +1121,7 @@ void msm_vpe_offset_update(int frame_pack, uint32_t pyaddr, uint32_t pcbcraddr,
 
 	msm_send_frame_to_vpe(pyaddr, pcbcraddr, ts, output_id);
 }
+#endif
 
 static void vpe_send_outmsg(uint8_t msgid, uint32_t pyaddr,
 	uint32_t pcbcraddr)
@@ -1319,7 +1389,7 @@ static int __msm_vpe_probe(struct platform_device *pdev)
 
 	vpebase =
 		ioremap(vpemem->start,
-				(vpemem->end - vpemem->start) + 1);
+				(vpemem->end -vpemem->start) + 1);
 	if (!vpebase) {
 		pr_err("[CAM] %s: vpe ioremap failed.\n", __func__);
 		rc = -ENOMEM;
@@ -1337,7 +1407,7 @@ static int __msm_vpe_probe(struct platform_device *pdev)
 
 /* from this part it is error handling. */
 vpe_release_mem_region:
-	release_mem_region(vpemem->start, (vpemem->end - vpemem->start) + 1);
+	release_mem_region(vpemem->start, (vpemem->end-vpemem->start) + 1);
 vpe_free_device:
 	return rc;  /* this rc should have error code. */
 }
@@ -1349,7 +1419,7 @@ static int __msm_vpe_remove(struct platform_device *pdev)
 
 	iounmap(vpe_device->vpebase);
 	release_mem_region(vpemem->start,
-					(vpemem->end - vpemem->start) + 1);
+					(vpemem->end -vpemem->start) + 1);
 	return 0;
 }
 
@@ -1364,7 +1434,18 @@ static struct platform_driver msm_vpe_driver = {
 
 static int __init msm_vpe_init(void)
 {
-	return platform_driver_register(&msm_vpe_driver);
+#ifdef CONFIG_CAMERA_3D
+#ifdef CONFIG_MACH_SHOOTER_U
+	if (system_rev == 0x80 && get_engineerid() == 0x1)
+#elif defined(CONFIG_MACH_SHOOTER) || defined(CONFIG_MACH_SHOOTER_K)
+	if (get_engineerid() & 0x4)
+#elif defined(CONFIG_MACH_SHOOTER_CT)
+	if (get_engineerid() == 0x0)
+#endif
+		return 0;
+	else
+#endif
+		return platform_driver_register(&msm_vpe_driver);
 }
 module_init(msm_vpe_init);
 

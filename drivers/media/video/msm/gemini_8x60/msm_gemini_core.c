@@ -101,7 +101,7 @@ int msm_gemini_core_reset(uint8_t op_mode, void *base, int size)
 			msecs_to_jiffies(tm));
 
 	if (!reset_done_ack) {
-		GMN_DBG("%s: reset ACK failed %d", __func__, rc);
+		GMN_PR_ERR("%s: reset ACK failed %d", __func__, rc);
 		return -EBUSY;
 	}
 
@@ -156,6 +156,7 @@ int msm_gemini_core_fe_buf_update(struct msm_gemini_core_buf *buf)
 
 void *msm_gemini_core_fe_pingpong_irq(int gemini_irq_status, void *context)
 {
+	pr_info("[CAM] %s:%d]\n", __func__, __LINE__);
 	return msm_gemini_hw_pingpong_irq(&fe_pingpong_buf);
 }
 
@@ -185,7 +186,7 @@ int msm_gemini_core_we_buf_reset(struct msm_gemini_hw_buf *buf)
 
 void *msm_gemini_core_we_pingpong_irq(int gemini_irq_status, void *context)
 {
-	GMN_DBG("%s:%d]\n", __func__, __LINE__);
+	pr_info("[CAM] %s:%d]\n", __func__, __LINE__);
 
 	return msm_gemini_hw_pingpong_irq(&we_pingpong_buf);
 }
@@ -194,7 +195,7 @@ void *msm_gemini_core_framedone_irq(int gemini_irq_status, void *context)
 {
 	struct msm_gemini_hw_buf *buf_p;
 
-	GMN_DBG("%s:%d]\n", __func__, __LINE__);
+	pr_info("[CAM] %s:%d]\n", __func__, __LINE__);
 
 	buf_p = msm_gemini_hw_pingpong_active_buffer(&we_pingpong_buf);
 	if (buf_p) {
@@ -209,7 +210,7 @@ void *msm_gemini_core_framedone_irq(int gemini_irq_status, void *context)
 void *msm_gemini_core_reset_ack_irq(int gemini_irq_status, void *context)
 {
 	/* @todo return the status back to msm_gemini_core_reset */
-	GMN_DBG("%s:%d]\n", __func__, __LINE__);
+	pr_info("[CAM] %s:%d]\n", __func__, __LINE__);
 	return NULL;
 }
 

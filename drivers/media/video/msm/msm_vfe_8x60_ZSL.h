@@ -1076,4 +1076,6 @@ struct vfe_cmd_stats_ack{
 struct vfe_cmd_stats_buf{
    uint32_t statsBuf[VFE_STATS_BUFFER_COUNT];
 };
+
+extern bool config_camera_zsl;
 #endif /* __MSM_VFE31_H__ */

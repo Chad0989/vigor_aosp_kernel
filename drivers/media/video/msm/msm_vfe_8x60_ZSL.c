@@ -27,10 +27,11 @@
 
 #include "msm_vfe_8x60_ZSL.h"
 #include "msm_vpe1_8x60.h"
-
-extern bool config_camera_zsl;
+#include <linux/clk.h>
 
 atomic_t irq_cnt;
+
+/* #define BUS_RATE_DEBUG 1 */
 
 #define CHECKED_COPY_FROM_USER(in) {					\
 	if (copy_from_user((in), (void __user *)cmd->value,		\
@@ -43,13 +44,16 @@ atomic_t irq_cnt;
 static struct vfe31_ctrl_type *vfe31_ctrl;
 static struct msm_camera_io_clk camio_clk;
 static void  *vfe_syncdata;
+#ifdef BUS_RATE_DEBUG
+static struct work_struct workq;
+#endif
 static void vfe31_send_msg_no_payload(enum VFE31_MESSAGE_ID id);
 static int32_t gamma_flag;
 static int32_t luma_flag;
-//HTC_START Max Sun 20110721 For debugging CSI error
+/* HTC_START Max Sun 20110721 For debugging CSI error */
 static atomic_t vfe_sof_irq_debug_cnt = ATOMIC_INIT(0);
 #define vfe_sof_irq_debug_max_cnt 200
-//HTC_END
+/* HTC_END */
 struct vfe31_isr_queue_cmd {
 	struct list_head list;
 	uint32_t                           vfeInterruptStatus0;
@@ -521,7 +525,7 @@ static void vfe_send_outmsg(uint8_t msgid, uint32_t pyaddr,
 	msg._u.msgOut.cbcrBuffer  = pcbcraddr;
 
 	if (p_sync->stereocam_enabled
-		&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+		&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 		if (config_camera_zsl) {
 			if (msgid == MSG_ID_OUTPUT_T) {
 				if (vfe31_ctrl->vfe_capture_count == 1) {
@@ -547,7 +551,7 @@ static void vfe_send_outmsg(uint8_t msgid, uint32_t pyaddr,
 				}
 			}
 		} else {
-			pr_info("[ZSL] %s: not ZSL\n", __func__);
+			pr_info("[CAM] %s: not ZSL\n", __func__);
 			if (msgid == MSG_ID_OUTPUT_T) {
 				if (vfe31_ctrl->outpath.out0.capture_cnt) {
 					pr_info("[CAM] %s: Store T vMsg for later use.\n",
@@ -587,15 +591,15 @@ static void vfe31_stop(void)
 	uint8_t  axiBusyFlag = true;
 	unsigned long flags;
 
-	printk("[CAM] vfe31_stop +\n");
+	pr_info("[CAM] vfe31_stop +\n");
 
 	spin_lock_irqsave(&vfe31_ctrl->state_lock, flags);
 	if (vfe31_ctrl->vstate == VFE_STATE_IDLE) {
 		spin_unlock_irqrestore(&vfe31_ctrl->state_lock, flags);
-		printk("[CAM] vfe31_stop VFE_STATE_IDLE -\n");
+		pr_info("[CAM] vfe31_stop VFE_STATE_IDLE -\n");
 		return;
 	}
-	printk("[CAM] vfe31_stop state %d\n", vfe31_ctrl->vstate);
+	pr_info("[CAM] vfe31_stop state %d\n", vfe31_ctrl->vstate);
 
 	vfe31_ctrl->vstate = VFE_STATE_IDLE;
 	spin_unlock_irqrestore(&vfe31_ctrl->state_lock, flags);
@@ -605,7 +609,7 @@ static void vfe31_stop(void)
 	vfe31_ctrl->stop_ack_pending = TRUE;
 	spin_unlock_irqrestore(&vfe31_ctrl->stop_flag_lock, flags);
 
-	printk("[CAM] vfe31_stop pending %d\n", vfe31_ctrl->stop_ack_pending);
+	pr_info("[CAM] vfe31_stop pending %d\n", vfe31_ctrl->stop_ack_pending);
 
 	/* disable all interrupts.  */
 	msm_io_w(VFE_DISABLE_ALL_IRQS,
@@ -633,12 +637,12 @@ static void vfe31_stop(void)
 		vfe31_ctrl->vfebase + VFE_AXI_CMD);
 	wmb();
 
-	printk("[CAM] vfe31_stop axiBusyFlag %d +\n", axiBusyFlag);
+	pr_info("[CAM] vfe31_stop axiBusyFlag %d +\n", axiBusyFlag);
 	while (axiBusyFlag) {
 		if (msm_io_r(vfe31_ctrl->vfebase + VFE_AXI_STATUS) & 0x1)
 			axiBusyFlag = false;
 	}
-	printk("[CAM] vfe31_stop axiBusyFlag -\n");
+	pr_info("[CAM] vfe31_stop axiBusyFlag -\n");
 
 	/* Ensure the write order while writing
 	to the command register using the barrier */
@@ -657,7 +661,7 @@ static void vfe31_stop(void)
 	to the command register using the barrier */
 	msm_io_w_mb(VFE_RESET_UPON_STOP_CMD,
 		vfe31_ctrl->vfebase + VFE_GLOBAL_RESET);
-	printk("[CAM] vfe31_stop -\n");
+	pr_info("[CAM] vfe31_stop -\n");
 }
 
 static int vfe31_disable(struct camera_enable_cmd *enable,
@@ -752,7 +756,7 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 			*p1++ = (regp1->paddr + regp1->info.y_off);
 
 			if (p_sync->stereocam_enabled
-				&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+				&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 				temp = p1 - 1;
 				pr_info("[CAM] %s: Thumb L Y_paddr 0x%x\n", __func__,
 					*temp);
@@ -781,7 +785,7 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 						 regp1->info.cbcr_off);
 
 			if (p_sync->stereocam_enabled
-				&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+				&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 				temp = p1 - 1;
 				pr_info("[CAM] %s: Thumb L CBCR_paddr 0x%x\n",
 					__func__, *temp);
@@ -798,7 +802,7 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 			*p1++ = (regp2->paddr + regp2->info.y_off);
 
 			if (p_sync->stereocam_enabled
-				&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+				&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 				temp = p1 - 1;
 				pr_info("[CAM] %s: MainImg L Y_paddr 0x%x\n",
 					__func__, *temp);
@@ -827,7 +831,7 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 						 regp2->info.cbcr_off);
 
 			if (p_sync->stereocam_enabled
-				&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+				&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 				temp = p1 - 1;
 				pr_info("[CAM] %s: MainImg L CBCR_paddr 0x%x\n",
 					__func__, *temp);
@@ -871,9 +875,9 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 		}
 		break;
 
-    case OUTPUT_1_2_AND_3:
-        pr_info("[CAM] %s: OUTPUT_1_2_AND_3", __func__);
-        pr_info("[CAM] %s: %d %d %d", __func__, ad->bufnum1, ad->bufnum2, ad->bufnum3);
+	case OUTPUT_1_2_AND_3:
+		pr_info("[CAM] %s: OUTPUT_1_2_AND_3", __func__);
+		pr_info("[CAM] %s: %d %d %d", __func__, ad->bufnum1, ad->bufnum2, ad->bufnum3);
 		/* use wm0& 4 for postview, wm1&5 for preview.*/
 		/* use wm2& 6 for main img */
 		if ((ad->bufnum1 < 1) || (ad->bufnum2 < 1) || (ad->bufnum3 < 1))
@@ -892,7 +896,7 @@ static int vfe31_config_axi(int mode, struct axidata *ad, uint32_t *ao)
 		vfe31_ctrl->outpath.output_mode |=
 			VFE31_OUTPUT_MODE_T;  /* thumbnail. */
 
-	        /* this is preview buffer. */
+		/* this is preview buffer. */
 		regp1 = &(ad->region[0]);
 		/* this is thumbnail buffer. */
 		regp2 = &(ad->region[ad->bufnum1]);
@@ -1226,9 +1230,9 @@ static void vfe31_start_common(void){
 	unsigned long flags;
 
 	vfe31_ctrl->start_ack_pending = TRUE;
-//HTC_START Max Sun 20110721 For debugging CSI error
-	atomic_set(&vfe_sof_irq_debug_cnt, 0); // reset the debug log count to 0
-//HTC_END
+/* HTC_START Max Sun 20110721 For debugging CSI error */
+	atomic_set(&vfe_sof_irq_debug_cnt, 0); /* reset the debug log count to 0 */
+/* HTC_END */
 	pr_info("[CAM] VFE opertaion mode = 0x%x, output mode = 0x%x\n",
 		vfe31_ctrl->operation_mode, vfe31_ctrl->outpath.output_mode);
 	msm_io_w(0x00EFE021, vfe31_ctrl->vfebase + VFE_IRQ_MASK_0);
@@ -1237,13 +1241,13 @@ static void vfe31_start_common(void){
 
 	msm_io_dump(vfe31_ctrl->vfebase, 0x600);
 
-//JEAN 20110507: enable bus out-of-order feature for bus overflow issue according to QCT +++
+/* JEAN 20110507: enable bus out-of-order feature for bus overflow issue according to QCT +++ */
     /*  enable out of order option */
 	msm_io_w(0x80000000, vfe31_ctrl->vfebase + 0x600);
     /*  enable performance monitor, this is for debug only. */
 	msm_io_w(1, vfe31_ctrl->vfebase + 0x18C);   /* enable PM0 */
 	msm_io_w(1, vfe31_ctrl->vfebase + 0x188);   /* pm go*/
-//JEAN 20110507---
+/* JEAN 20110507--- */
 
 	/* Ensure the write order while writing
 	to the command register using the barrier */
@@ -1258,7 +1262,7 @@ static void vfe31_start_common(void){
 }
 
 static int vfe31_start_recording(void){
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 	if (!p_sync->stereocam_enabled) {
 		msm_camio_set_perf_lvl(S_VIDEO);
 		usleep(1000);
@@ -1280,7 +1284,7 @@ static int vfe31_start_recording(void){
 }
 
 static int vfe31_stop_recording(void){
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 
 	vfe31_ctrl->req_stop_video_rec = TRUE;
 	/* Mask with 0x7 to extract the pixel pattern*/
@@ -1303,19 +1307,22 @@ static int vfe31_stop_recording(void){
 }
 
 static void vfe31_liveshot(void){
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 	if (p_sync)
 		p_sync->liveshot_enabled = true;
 }
 
-static int vfe31_zsl(void) {
+static int vfe31_zsl(void)
+{
 	uint32_t irq_comp_mask = 0;
 	uint32_t temp;
 	/* capture command is valid for both idle and active state. */
 	irq_comp_mask	=
 		msm_io_r(vfe31_ctrl->vfebase + VFE_IRQ_COMP_MASK);
 
-	pr_info("[CAM] %s: vfe31_ctrl->operation_mode %d %d", __func__,vfe31_ctrl->operation_mode, vfe31_ctrl->outpath.output_mode);
+	pr_info("[CAM] %s: vfe31_ctrl->operation_mode %d %d", __func__,
+		vfe31_ctrl->operation_mode, vfe31_ctrl->outpath.output_mode);
+
 	if ((vfe31_ctrl->operation_mode == VFE_MODE_OF_OPERATION_ZSL)) {
 		if (vfe31_ctrl->outpath.output_mode & VFE31_OUTPUT_MODE_P) {
 			irq_comp_mask |=
@@ -1365,10 +1372,10 @@ static int vfe31_zsl(void) {
 	}
 	msm_io_w(irq_comp_mask, vfe31_ctrl->vfebase + VFE_IRQ_COMP_MASK);
 	msm_io_r(vfe31_ctrl->vfebase + VFE_IRQ_COMP_MASK);
-	vfe31_start_common();
 
 	msm_camio_set_perf_lvl(S_ZSL);
 	usleep(1000);
+	vfe31_start_common();
 
 	msm_io_r(vfe31_ctrl->vfebase + VFE_IRQ_COMP_MASK);
 	/* for debug */
@@ -1377,8 +1384,9 @@ static int vfe31_zsl(void) {
 	return 0;
 }
 
-static void vfe31_stereocam(uint32_t enable){
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+static void vfe31_stereocam(uint32_t enable)
+{
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 	if (p_sync) {
 		CDBG("[CAM] %s: Enable StereoCam %d!!!\n", __func__, enable);
 		p_sync->stereocam_enabled = enable;
@@ -1411,8 +1419,8 @@ static int vfe31_capture(uint32_t num_frames_capture)
 #endif
 
 	/* capture command is valid for both idle and active state. */
-	if (!config_camera_zsl){
-		pr_info("[ZSL] %s: not ZSL\n", __func__);
+	if (!config_camera_zsl) {
+		pr_info("[CAM] %s: not ZSL\n", __func__);
 		vfe31_ctrl->outpath.out1.capture_cnt = num_frames_capture;
 		if (vfe31_ctrl->operation_mode == 1) {
 			vfe31_ctrl->outpath.out0.capture_cnt =
@@ -1433,7 +1441,7 @@ static int vfe31_capture(uint32_t num_frames_capture)
 					((0x1 << (vfe31_ctrl->outpath.out0.ch0 + 8)) |
 					(0x1 << (vfe31_ctrl->outpath.out0.ch1 + 8)));
 			} else {
-				pr_info("[ZSL] %s: not ZSL\n", __func__);
+				pr_info("[CAM] %s: not ZSL\n", __func__);
 				irq_comp_mask |= (0x1 << vfe31_ctrl->outpath.out0.ch0 |
 					0x1 << vfe31_ctrl->outpath.out0.ch1);
 			}
@@ -1490,7 +1498,7 @@ static int vfe31_capture(uint32_t num_frames_capture)
 	}
 #endif
 	if (p_sync->stereocam_enabled
-		&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+		&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 		pr_info("[CAM] vfe send snapshot command\n");
 		p_sync->cdata.cfgtype = CFG_SET_MODE;
 		p_sync->cdata.mode = SENSOR_SNAPSHOT_MODE;
@@ -1505,9 +1513,9 @@ static int vfe31_capture(uint32_t num_frames_capture)
 	vfe31_start_common();
 
 	if (p_sync->stereocam_enabled
-		&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+		&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 		tempirq = msm_io_r(vfe31_ctrl->vfebase + VFE_IRQ_MASK_0);
-		tempirq+=4;
+		tempirq += 4;
 		msm_io_w(tempirq, vfe31_ctrl->vfebase + VFE_IRQ_MASK_0);
 	}
 
@@ -1517,7 +1525,7 @@ static int vfe31_capture(uint32_t num_frames_capture)
 	msm_io_w(1, vfe31_ctrl->vfebase + 0x188);
 	/*for sp3d only*/
 	if (p_sync->stereocam_enabled
-		&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)) {
+		&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)) {
 		pr_info("[CAM] vfe snapshot config done, send command to get L frame");
 		p_sync->cdata.cfgtype = CFG_GET_SP3D_L_FRAME;
 		p_sync->sctrl.temp_s_config(&p_sync->cdata);
@@ -1545,7 +1553,7 @@ static int vfe31_start(void)
 	uint32_t irq_comp_mask = 0;
 	uint32_t temp;
 	/* start command now is only good for continuous mode. */
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 	if ((vfe31_ctrl->operation_mode != VFE_MODE_OF_OPERATION_CONTINUOUS) &&
 		(vfe31_ctrl->operation_mode != VFE_MODE_OF_OPERATION_VIDEO))
 		return 0;
@@ -1591,21 +1599,21 @@ static void vfe31_update(void)
 	uint32_t temp;
 	CDBG("[CAM] vfe31_update\n");
 
-	if(gamma_flag == true) {
+	if (gamma_flag == true) {
 		temp = msm_io_r(vfe31_ctrl->vfebase + V31_RGB_G_OFF);
 		CDBG("[CAM] %s: gamma bank %d\n", __func__, (temp != 0));
 
-		if(temp == 0)
+		if (temp == 0)
 			msm_io_w(7, vfe31_ctrl->vfebase + V31_RGB_G_OFF);
 		else
 			msm_io_w(0, vfe31_ctrl->vfebase + V31_RGB_G_OFF);
 
 		gamma_flag = false;
 	}
-	if(luma_flag == true) {
+	if (luma_flag == true) {
 		temp = msm_io_r(vfe31_ctrl->vfebase + V31_LA_OFF);
 
-		if(temp == 0)
+		if (temp == 0)
 			msm_io_w(1, vfe31_ctrl->vfebase + V31_LA_OFF);
 		else
 			msm_io_w(0, vfe31_ctrl->vfebase + V31_LA_OFF);
@@ -1739,7 +1747,7 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 	uint32_t *cmdp_local = NULL;
 	uint32_t snapshot_cnt = 0;
 	uint32_t stereo_cam_enable = 0;
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 
 	CDBG("[CAM] vfe31_proc_general: cmdID = %s, length = %d\n",
 		vfe31_general_cmd[cmd->id], cmd->length);
@@ -1751,7 +1759,7 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 		break;
 	case V31_START:
 		pr_info("[CAM] vfe31_proc_general: V31_START\n");
-		atomic_set(&p_sync->stereo_snap_state,STEREO_SNAP_IDLE);
+		atomic_set(&p_sync->stereo_snap_state, STEREO_SNAP_IDLE);
 		p_sync->vfeState = VFE_STATE_ACTIVE;
 		rc = vfe31_start();
 		break;
@@ -1775,16 +1783,14 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 	case V31_START_RECORDING:
 		pr_info("[CAM] vfe31_proc_general: V31_START_RECORDING\n");
 		rc = vfe31_start_recording();
-		if (p_sync->stereocam_enabled) {
+		if (p_sync->stereocam_enabled)
 			p_sync->vfeRecordState = VFE_STATE_ACTIVE;
-		}
 		break;
 	case V31_STOP_RECORDING:
 		pr_info("[CAM] vfe31_proc_general: V31_STOP_RECORDING\n");
 		rc = vfe31_stop_recording();
-		if (p_sync->stereocam_enabled) {
+		if (p_sync->stereocam_enabled)
 			p_sync->vfeRecordState = VFE_STATE_IDLE;
-		}
 		break;
 	case V31_OPERATION_CFG: {
 		if (cmd->length != V31_OPERATION_CFG_LEN) {
@@ -2105,11 +2111,10 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 		old_val = msm_io_r(vfe31_ctrl->vfebase + V31_LA_OFF);
 
 		cmdp += 1;
-		if (old_val != 0x0){
+		if (old_val != 0x0) {
 			CDBG("[CAM] V31_LA_UPDATE, ch 0\n");
 			vfe31_write_la_cfg(LUMA_ADAPT_LUT_RAM_BANK0 , cmdp);
-		}
-		else{
+		} else {
 			CDBG("[CAM] V31_LA_UPDATE, ch 1\n");
 			vfe31_write_la_cfg(LUMA_ADAPT_LUT_RAM_BANK1 , cmdp);
 		}
@@ -2142,7 +2147,7 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 		vfe31_liveshot();
 		break;
 
-    case V31_STEREOCAM:
+	case V31_STEREOCAM:
 		if (copy_from_user(&stereo_cam_enable, (void __user *)(cmd->value),
 				sizeof(uint32_t))) {
 			rc = -EFAULT;
@@ -2283,9 +2288,7 @@ static int vfe31_proc_general(struct msm_vfe31_cmd *cmd)
 	}
 
 proc_general_done:
-	if (cmdp)
-		kfree(cmdp);
-
+	kfree(cmdp);
 	return rc;
 }
 
@@ -2589,7 +2592,7 @@ static int vfe31_config(struct msm_vfe_cfg_cmd *cmd, void *data)
 	case CMD_AXI_CFG_ZSL: {
 		struct axidata *axid;
 		uint32_t *axio = NULL;
-		printk("%s, CMD_AXI_CFG_ZSL\n", __func__);
+		pr_info("[CAM] %s, CMD_AXI_CFG_ZSL\n", __func__);
 		axid = data;
 		if (!axid)
 			return -EFAULT;
@@ -2643,10 +2646,8 @@ static int vfe31_config(struct msm_vfe_cfg_cmd *cmd, void *data)
 		break;
 	}
 vfe31_config_done:
-	if (scfg)
-		kfree(scfg);
-	if (sack)
-		kfree(sack);
+	kfree(scfg);
+	kfree(sack);
 	CDBG("[CAM] %s done: rc = %d\n", __func__, (int) rc);
 	return rc;
 }
@@ -2677,13 +2678,13 @@ static inline void vfe31_read_irq_status(struct vfe31_irq_status *out)
 	msm_io_w_mb(1, vfe31_ctrl->vfebase + VFE_IRQ_CMD);
 
 }
-//HTC_START Max Sun 20110721 For debugging CSI error
+/* HTC_START Max Sun 20110721 For debugging CSI error */
 static void vfe31_disable_irq_debug_msg(void)
 {
 	msm_camio_disable_csi_log();
 	atomic_set(&vfe_sof_irq_debug_cnt, 0);
 }
-//HTC_END
+/* HTC_END */
 static void vfe31_send_msg_no_payload(enum VFE31_MESSAGE_ID id)
 {
 	struct vfe_message msg;
@@ -2766,9 +2767,9 @@ static void vfe31_process_reg_update_irq(void)
 	}
 	if (vfe31_ctrl->start_ack_pending == TRUE) {
 		pr_info("[CAM] irq startAckIrq\n");
-//HTC_START Max Sun 20110721 For debugging CSI error
+/* HTC_START Max Sun 20110721 For debugging CSI error */
 		vfe31_disable_irq_debug_msg();
-//HTC_END
+/* HTC_END */
 		vfe31_send_msg_no_payload(MSG_ID_START_ACK);
 		vfe31_ctrl->start_ack_pending = FALSE;
 	} else {
@@ -2915,9 +2916,9 @@ static void vfe31_process_camif_sof_irq(void)
 		VFE_MODE_OF_OPERATION_RAW_SNAPSHOT) {
 		if (vfe31_ctrl->start_ack_pending) {
 			pr_info("[CAM] irq startAckIrq\n");
-//HTC_START Max Sun 20110721 For debugging CSI error
+/* HTC_START Max Sun 20110721 For debugging CSI error */
 			vfe31_disable_irq_debug_msg();
-//HTC_END
+/* HTC_END */
 			vfe31_send_msg_no_payload(MSG_ID_START_ACK);
 			vfe31_ctrl->start_ack_pending = FALSE;
 		}
@@ -3027,19 +3028,19 @@ static void vfe31_process_error_irq(uint32_t errStatus)
 
     /* read status too when overflow happens.  This is foe debug only.*/
 	read_val = msm_io_r(vfe31_ctrl->vfebase + 0x0180);
-	pr_err("VFE_BUS_PING_PONG_STATUS = 0x%x\n", read_val );
+	pr_err("[CAM] VFE_BUS_PING_PONG_STATUS = 0x%x\n", read_val);
 
 	read_val = msm_io_r(vfe31_ctrl->vfebase + 0x0184);
-	pr_err("VFE_BUS_OPERATION_STATUS = 0x%x\n", read_val);
+	pr_err("[CAM] VFE_BUS_OPERATION_STATUS = 0x%x\n", read_val);
 
 	read_val = msm_io_r(vfe31_ctrl->vfebase + 0x0190);
-	pr_err("VFE_BUS_IMAGE_MASTER_0_WR_PM_STATS_0 = 0x%x\n", read_val);
+	pr_err("[CAM] VFE_BUS_IMAGE_MASTER_0_WR_PM_STATS_0 = 0x%x\n", read_val);
 
 	read_val = msm_io_r(vfe31_ctrl->vfebase + 0x0194);
-	pr_err("VFE_BUS_IMAGE_MASTER_0_WR_PM_STATS_1 = 0x%x\n", read_val);
+	pr_err("[CAM] VFE_BUS_IMAGE_MASTER_0_WR_PM_STATS_1 = 0x%x\n", read_val);
 
 	read_val = msm_io_r(vfe31_ctrl->vfebase + 0x01DC);
-	pr_err("VFE_AXI_STATUS = 0x%x\n", read_val);
+	pr_err("[CAM] VFE_AXI_STATUS = 0x%x\n", read_val);
 }
 
 #define VFE31_AXI_OFFSET 0x0050
@@ -3060,6 +3061,25 @@ static void vfe31_process_error_irq(uint32_t errStatus)
 	vfe31_put_ch_pong_addr((chn), (addr)) : \
 	vfe31_put_ch_ping_addr((chn), (addr)))
 
+
+/* Check flags for irq */
+#define Check_flags_out0 \
+	((1 << (vfe31_ctrl->outpath.out0.ch0)) | (1 << (vfe31_ctrl->outpath.out0.ch1)))
+#define Check_flags_out1 \
+	((1 << (vfe31_ctrl->outpath.out1.ch0)) | (1 << (vfe31_ctrl->outpath.out1.ch1)))
+#define Check_flags_out2 \
+	((1 << (vfe31_ctrl->outpath.out2.ch0)) | (1 << (vfe31_ctrl->outpath.out2.ch1)))
+
+/* Counter for ppStatus error */
+static bool flag_ppStatusErr_0_ZSL = FALSE;
+static bool flag_ppStatusErr_1_ZSL = FALSE;
+static bool flag_ppStatusErr_2_ZSL = FALSE;
+static bool flag_ppStatusErr_0 = FALSE;
+static bool flag_ppStatusErr_1 = FALSE;
+static bool flag_ppStatusErr_2 = FALSE;
+
+
+
 static void vfe31_process_output_path_irq_0_zsl(void)
 {
 	uint32_t ping_pong;
@@ -3072,6 +3092,16 @@ static void vfe31_process_output_path_irq_0_zsl(void)
 		if (vfe31_ctrl->outpath.out0.free_buf.available) {
 			ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 				VFE_BUS_PING_PONG_STATUS);
+
+		CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+		/* Ensure that both wm0 and wm4 ping and pong buffers are active*/
+		if (!(((ping_pong & Check_flags_out0) == Check_flags_out0) ||
+			((ping_pong & Check_flags_out0) == 0x0))) {
+			pr_err(" Irq_0_zsl - skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", ping_pong);
+			flag_ppStatusErr_0_ZSL = TRUE;
+			return;
+		}
 
 		/* Y channel */
 		pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3100,7 +3130,7 @@ static void vfe31_process_output_path_irq_0_zsl(void)
 		} else {
 			vfe31_ctrl->outpath.out0.frame_drop_cnt++;
 			if (vfe31_ctrl->outpath.out0.frame_drop_cnt > 20) {
-				pr_err("[CAM] path_irq_0 - no free buffer!\n");
+				pr_info("[CAM] path_irq_0 - no free buffer!\n");
 				pr_info("[CAM] %s: op mode = %d, capture_cnt = %d\n", __func__,
 					vfe31_ctrl->operation_mode, vfe31_ctrl->vfe_capture_count);
 				pr_info("[CAM] %s: output0.free_buf.available = %d\n", __func__,
@@ -3113,10 +3143,20 @@ static void vfe31_process_snapshot_frame(void)
 {
 	uint32_t ping_pong;
 	uint32_t pyaddr, pcbcraddr;
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 
 	ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 		VFE_BUS_PING_PONG_STATUS);
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out1) == Check_flags_out1) ||
+		((ping_pong & Check_flags_out1) == 0x0))) {
+		pr_err("[CAM]%s: Irq_1_zsl(out1)- skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", __func__, ping_pong);
+		flag_ppStatusErr_1_ZSL = TRUE;
+		return;
+	}
+
 
 	/* Y channel- Main Image */
 	pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3141,6 +3181,17 @@ static void vfe31_process_snapshot_frame(void)
 		vfe31_ctrl->outpath.out1.free_buf.available = 0;
 	}
 	 vfe_send_outmsg(MSG_ID_OUTPUT_S, pyaddr, pcbcraddr);
+
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out0) == Check_flags_out0) ||
+		((ping_pong & Check_flags_out0) == 0x0))) {
+		pr_err("[CAM]%s: Irq_1_zsl(out0)- skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", __func__, ping_pong);
+		flag_ppStatusErr_1_ZSL = TRUE;
+		return;
+	}
+
 
 	/* Y channel- TN Image */
 	pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3179,12 +3230,12 @@ static void vfe31_process_snapshot_frame(void)
 			VFE_CAMIF_COMMAND);
 	}
 	if (p_sync->stereocam_enabled
-			&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)
+			&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)
 			&& (vfe31_ctrl->vfe_capture_count == 1)) {
 		pr_info("[CAM] sp3d get L frame done, send command to get R frame");
-		//msm_camio_csi_core_reset();
-		//p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME;
-		//p_sync->sctrl.temp_s_config(&p_sync->cdata);
+		/* msm_camio_csi_core_reset(); */
+		/* p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME; */
+		/* p_sync->sctrl.temp_s_config(&p_sync->cdata); */
 		vfe31_send_msg_no_payload(
 			MSG_ID_SP3D_SEND_R);
 
@@ -3195,10 +3246,21 @@ static void vfe31_process_raw_snapshot_frame(void)
 {
 	uint32_t ping_pong;
 	uint32_t pyaddr, pcbcraddr;
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 
 	ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 		VFE_BUS_PING_PONG_STATUS);
+
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out1) == Check_flags_out1) ||
+		((ping_pong & Check_flags_out1) == 0x0))) {
+		pr_err("[CAM]%s: Irq_1_zsl(out1)- skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", __func__, ping_pong);
+		flag_ppStatusErr_1_ZSL = TRUE;
+		return;
+	}
+
 
 	/* Y channel- Main Image */
 	pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3236,12 +3298,12 @@ static void vfe31_process_raw_snapshot_frame(void)
 			VFE_CAMIF_COMMAND);
 	}
 	if (p_sync->stereocam_enabled
-			&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)
+			&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)
 			&& (vfe31_ctrl->vfe_capture_count == 1)) {
 		pr_info("[CAM] sp3d get L frame done, send command to get R frame");
-		//msm_camio_csi_core_reset();
-		//p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME;
-		//p_sync->sctrl.temp_s_config(&p_sync->cdata);
+		/* msm_camio_csi_core_reset(); */
+		/* p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME; */
+		/* p_sync->sctrl.temp_s_config(&p_sync->cdata); */
 		vfe31_send_msg_no_payload(
 			MSG_ID_SP3D_SEND_R);
 	}
@@ -3252,6 +3314,16 @@ static void vfe31_process_zsl_frame(void)
 	uint32_t pyaddr, pcbcraddr;
 	ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 		VFE_BUS_PING_PONG_STATUS);
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out2) == Check_flags_out2) ||
+		((ping_pong & Check_flags_out2) == 0x0))) {
+		pr_err("[CAM]%s: Irq_1_zsl(out2)- skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", __func__, ping_pong);
+		flag_ppStatusErr_1_ZSL = TRUE;
+		return;
+	}
+
 
 	/* Y channel- Main Image */
 	pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3276,6 +3348,17 @@ static void vfe31_process_zsl_frame(void)
 		vfe31_ctrl->outpath.out2.free_buf.available = 0;
 	}
 	 vfe_send_outmsg(MSG_ID_OUTPUT_S, pyaddr, pcbcraddr);
+
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out1) == Check_flags_out1) ||
+		((ping_pong & Check_flags_out1) == 0x0))) {
+		pr_err("[CAM]%s: Irq_1_zsl(out1)- skip the frame pp_status is not proper"
+				"PP_status = 0x%x\n", __func__, ping_pong);
+		flag_ppStatusErr_1_ZSL = TRUE;
+		return;
+	}
+
 
 	/* Y channel- TN Image */
 	pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3326,7 +3409,7 @@ static void vfe31_process_output_path_irq_1_zsl(void)
 	} else {
 		vfe31_ctrl->outpath.out1.frame_drop_cnt++;
 		if (vfe31_ctrl->outpath.out1.frame_drop_cnt > 20) {
-			pr_err("[CAM] path_irq_1 - no free buffer!\n");
+			pr_info("[CAM] path_irq_1 - no free buffer!\n");
 			pr_info("[CAM] %s: op mode = %d, capture_cnt = %d\n", __func__,
 				vfe31_ctrl->operation_mode, vfe31_ctrl->vfe_capture_count);
 			pr_info("[CAM] %s: output1.free_buf.available = %d\n", __func__,
@@ -3348,6 +3431,16 @@ static void vfe31_process_output_path_irq_2_zsl(void)
 	if (vfe31_ctrl->outpath.out2.free_buf.available) {
 			ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 				VFE_BUS_PING_PONG_STATUS);
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	/* Ensure that both wm1 and wm5 ping and pong buffers are active*/
+	if (!(((ping_pong & Check_flags_out2) == Check_flags_out2) ||
+		((ping_pong & Check_flags_out2) == 0x0))) {
+		pr_err(" Irq_2_zsl - skip the frame pp_status is not proper"
+			"PP_status = 0x%x\n", ping_pong);
+		flag_ppStatusErr_2_ZSL = TRUE;
+		return;
+	}
 
 			/* Y channel */
 			pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3374,7 +3467,7 @@ static void vfe31_process_output_path_irq_2_zsl(void)
 		} else {
 			vfe31_ctrl->outpath.out2.frame_drop_cnt++;
 			if (vfe31_ctrl->outpath.out2.frame_drop_cnt > 20) {
-				pr_err("[CAM] path_irq_2 - no free buffer!\n");
+				pr_info("[CAM] path_irq_2 - no free buffer!\n");
 				pr_info("[CAM] %s: op mode = %d, capture_cnt = %d\n", __func__,
 					vfe31_ctrl->operation_mode, vfe31_ctrl->vfe_capture_count);
 				pr_info("[CAM] %s: output2.free_buf.available = %d\n", __func__,
@@ -3410,6 +3503,16 @@ static void vfe31_process_output_path_irq_0(void)
 	if (out_bool) {
 		ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 			VFE_BUS_PING_PONG_STATUS);
+
+	/* Ensure that both wm0 and wm4 ping and pong buffers are active*/
+	if (!(((ping_pong & Check_flags_out0) == Check_flags_out0) ||
+		((ping_pong & Check_flags_out0) == 0x0))) {
+		pr_err(" Irq_0 - skip the frame pp_status is not proper"
+			"PP_status = 0x%x\n", ping_pong);
+		flag_ppStatusErr_0 = TRUE;
+		return;
+	}
+
 
 		/* Y channel */
 		pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3448,7 +3551,7 @@ static void vfe31_process_output_path_irq_0(void)
 	} else {
 		vfe31_ctrl->outpath.out0.frame_drop_cnt++;
 		if (vfe31_ctrl->outpath.out0.frame_drop_cnt > 20) {
-			pr_err("[CAM] path_irq_0 - no free buffer!\n");
+			pr_info("[CAM] path_irq_0 - no free buffer!\n");
 			pr_info("[CAM] %s: op mode = %d, capture_cnt = %d\n", __func__,
 					vfe31_ctrl->operation_mode, vfe31_ctrl->vfe_capture_count);
 			pr_info("[CAM] %s: output0.free_buf.available = %d\n", __func__,
@@ -3476,6 +3579,15 @@ static void vfe31_process_output_path_irq_1(void)
 	if (out_bool) {
 			ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 				VFE_BUS_PING_PONG_STATUS);
+
+	CDBG("%s, ping_pong = 0x%x \n", __func__, ping_pong);
+	if (!(((ping_pong & Check_flags_out1) == Check_flags_out1) ||
+		((ping_pong & Check_flags_out1) == 0x0))) {
+		pr_err(" Irq_1 - skip the frame pp_status is not proper"
+			"PP_status = 0x%x\n", ping_pong);
+		flag_ppStatusErr_1 = TRUE;
+		return;
+	}
 
 			/* Y channel */
 			pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3507,7 +3619,7 @@ static void vfe31_process_output_path_irq_1(void)
 		} else {
 			vfe31_ctrl->outpath.out1.frame_drop_cnt++;
 			if (vfe31_ctrl->outpath.out1.frame_drop_cnt > 20) {
-				pr_err("[CAM] path_irq_1 - no free buffer!\n");
+				pr_info("[CAM] path_irq_1 - no free buffer!\n");
 				pr_info("[CAM] %s: op mode = %d, capture_cnt = %d\n", __func__,
 					vfe31_ctrl->operation_mode, vfe31_ctrl->vfe_capture_count);
 				pr_info("[CAM] %s: output1.free_buf.available = %d\n", __func__,
@@ -3540,6 +3652,14 @@ static void vfe31_process_output_path_irq_2(void)
 	if (out_bool) {
 			ping_pong = msm_io_r(vfe31_ctrl->vfebase +
 				VFE_BUS_PING_PONG_STATUS);
+
+	if (!(((ping_pong & Check_flags_out2) == Check_flags_out2) ||
+		((ping_pong & Check_flags_out2) == 0x0))) {
+		pr_err(" Irq_2 - skip the frame pp_status is not proper"
+			"PP_status = 0x%x\n", ping_pong);
+		flag_ppStatusErr_2 = TRUE;
+		return;
+	}
 
 			/* Y channel */
 			pyaddr = vfe31_get_ch_addr(ping_pong,
@@ -3768,7 +3888,7 @@ static void vfe31_do_tasklet(unsigned long data)
 	uint32_t temp_reg_data;
 
 	struct vfe31_isr_queue_cmd *qcmd = NULL;
-	struct msm_sync* p_sync = (struct msm_sync *)vfe_syncdata;
+	struct msm_sync *p_sync = (struct msm_sync *)vfe_syncdata;
 
 	CDBG("[CAM] === vfe31_do_tasklet start === \n");
 
@@ -3795,9 +3915,8 @@ static void vfe31_do_tasklet(unsigned long data)
 			vfe31_process_reg_update_irq();
 		}
 #if 0/*debug log*/
-		if (qcmd->vfeInterruptStatus0 & 4) {
+		if (qcmd->vfeInterruptStatus0 & 4)
 			pr_info("[CAM] EOF irq !\n");
-		}
 #endif
 		if (qcmd->vfeInterruptStatus1 &
 				VFE_IMASK_WHILE_STOPPING_1) {
@@ -3815,6 +3934,10 @@ static void vfe31_do_tasklet(unsigned long data)
 				vfe31_process_error_irq(
 					qcmd->vfeInterruptStatus1 &
 					VFE31_IMASK_ERROR_ONLY_1);
+
+#ifdef BUS_RATE_DEBUG
+					schedule_work(&workq);
+#endif
 			}
 
 			if (config_camera_zsl) {
@@ -3835,7 +3958,7 @@ static void vfe31_do_tasklet(unsigned long data)
 					vfe31_process_output_path_irq_2_zsl();
 				}
 			} else {
-				pr_info("[ZSL] %s: not ZSL\n", __func__);
+				pr_info("[CAM] %s: not ZSL\n", __func__);
 				/* next, check output path related interrupts. */
 				if (qcmd->vfeInterruptStatus0 &
 					VFE_IRQ_STATUS0_IMAGE_COMPOSIT_DONE0_MASK) {
@@ -3868,7 +3991,7 @@ static void vfe31_do_tasklet(unsigned long data)
 							vfe31_ctrl->vfebase +
 							VFE_CAMIF_COMMAND);
 					} else if (p_sync->stereocam_enabled
-							&& (strcmp(vfe31_ctrl->s_info->sensor_name,"sp3d") == 0)
+							&& (strcmp(vfe31_ctrl->s_info->sensor_name, "sp3d") == 0)
 							&& (vfe31_ctrl->outpath.out0.capture_cnt == 1)
 							&& (vfe31_ctrl->outpath.out1.capture_cnt == 1)
 							&& ((qcmd->vfeInterruptStatus0 & VFE_IRQ_STATUS0_IMAGE_COMPOSIT_DONE0_MASK)
@@ -3882,9 +4005,9 @@ static void vfe31_do_tasklet(unsigned long data)
 						msm_io_w_mb(temp_reg_data - V31_CAMIF_SNAP_R_WIN_CFG_MASK,
 							vfe31_ctrl->vfebase + V31_CAMIF_WIN_H_CFG_OFF);
 
-						//msm_camio_csi_core_reset();
-						//p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME;
-						//p_sync->sctrl.temp_s_config(&p_sync->cdata);
+						/* msm_camio_csi_core_reset(); */
+						/* p_sync->cdata.cfgtype = CFG_GET_SP3D_R_FRAME; */
+						/* p_sync->sctrl.temp_s_config(&p_sync->cdata); */
 
 						vfe31_send_msg_no_payload(
 							MSG_ID_SP3D_SEND_R);
@@ -3957,13 +4080,13 @@ static void vfe31_do_tasklet(unsigned long data)
 		}
 		if (qcmd->vfeInterruptStatus0 &
 				VFE_IRQ_STATUS0_CAMIF_SOF_MASK) {
-//HTC_START Max Sun 20110721 For debugging CSI error
-			if (vfe31_ctrl->start_ack_pending && atomic_read(&vfe_sof_irq_debug_cnt) < vfe_sof_irq_debug_max_cnt)
-			{
+/* HTC_START Max Sun 20110721 For debugging CSI error */
+			if (vfe31_ctrl->start_ack_pending &&
+				(atomic_read(&vfe_sof_irq_debug_cnt) < vfe_sof_irq_debug_max_cnt)) {
 				atomic_inc(&vfe_sof_irq_debug_cnt);
 				pr_info("[CAM] irq camifSofIrq, count %d\n", atomic_read(&vfe_sof_irq_debug_cnt));
 			}
-//HTC_END
+/* HTC_END */
 			vfe31_process_camif_sof_irq();
 		}
 		kfree(qcmd);
@@ -3972,6 +4095,36 @@ static void vfe31_do_tasklet(unsigned long data)
 }
 
 DECLARE_TASKLET(vfe31_tasklet, vfe31_do_tasklet, 0);
+
+#ifdef BUS_RATE_DEBUG
+static void vfe31_do_workqueue(struct work_struct *work)
+{
+
+	struct clk *clk = NULL;
+	u32 rate = 0;
+
+	clk = clk_get(NULL, "mmfab_clk");
+	rate = clk_get_rate(clk);
+	pr_info("[CAM] [cam] mmfab_clk  = %d\n", rate);
+	clk_put(clk);
+
+	clk = clk_get(NULL, "smi_clk");
+	rate = clk_get_rate(clk);
+	pr_info("[CAM] [cam] smi_clk  = %d\n", rate);
+	clk_put(clk);
+
+	clk = clk_get(NULL, "ebi1_clk");
+	rate = clk_get_rate(clk);
+	pr_info("[CAM] [cam] ebi1_clk  = %d\n", rate);
+	clk_put(clk);
+
+	clk = clk_get(NULL, "vfe_clk");
+	rate = clk_get_rate(clk);
+	pr_info("[CAM] [cam] vfe_clk  = %d\n", rate);
+	clk_put(clk);
+
+}
+#endif
 
 static irqreturn_t vfe31_parse_irq(int irq_num, void *data)
 {
@@ -4023,6 +4176,9 @@ static void vfe31_release(struct platform_device *pdev)
 
 	pr_info("[CAM] %s, free_irq\n", __func__);
 	free_irq(vfe31_ctrl->vfeirq, 0);
+#ifdef BUS_RATE_DEBUG
+	flush_scheduled_work();
+#endif
 	tasklet_kill(&vfe31_tasklet);
 
 	if (atomic_read(&irq_cnt))
@@ -4037,8 +4193,7 @@ static void vfe31_release(struct platform_device *pdev)
 	iounmap(vfe31_ctrl->vfebase);
 	kfree(vfe31_ctrl);
 	vfe31_ctrl = NULL;
-	release_mem_region(vfemem->start, (vfemem->end - vfemem->start) + 1);
-
+	release_mem_region(vfemem->start, (vfemem->end -vfemem->start) + 1);
 /*HTC_START Horng 20110905*/
 /*Move to msm_camera_8x60.c , It's to call after sensor release*/
 #if 0
@@ -4091,7 +4246,7 @@ static int vfe31_resource_init(struct msm_vfe_callback *presp,
 	vfe31_ctrl->vfeirq = vfeirq->start;
 
 	vfe31_ctrl->vfebase =
-		ioremap(vfemem->start, (vfemem->end - vfemem->start) + 1);
+		ioremap(vfemem->start, (vfemem->end -vfemem->start) + 1);
 	if (!vfe31_ctrl->vfebase) {
 		rc = -ENOMEM;
 		pr_err("[CAM] %s: vfe ioremap failed\n", __func__);
@@ -4140,7 +4295,7 @@ cmd_init_failed3:
 cmd_init_failed2:
 	kfree(vfe31_ctrl);
 cmd_init_failed1:
-	release_mem_region(vfemem->start, (vfemem->end - vfemem->start) + 1);
+	release_mem_region(vfemem->start, (vfemem->end -vfemem->start) + 1);
 	return rc;
 }
 
@@ -4154,6 +4309,19 @@ static int vfe31_init(struct msm_vfe_callback *presp,
 	camio_clk = camdev->ioclk;
 
 	rc = vfe31_resource_init(presp, pdev, vfe_syncdata);
+	/* Check whether there is ever happened y/cbcr miss match case*/
+	if (flag_ppStatusErr_0_ZSL != FALSE || flag_ppStatusErr_0 != FALSE ||
+		flag_ppStatusErr_1_ZSL != FALSE || flag_ppStatusErr_1 != FALSE ||
+		flag_ppStatusErr_2_ZSL != FALSE || flag_ppStatusErr_2 != FALSE) {
+		pr_info("flag_ppStatusErr: irq0_ZSL:%d irq1_ZSL:%d irq2_ZSL:%d irq0:%d irq1:%d irq2:%d",
+			flag_ppStatusErr_0_ZSL,
+			flag_ppStatusErr_1_ZSL,
+			flag_ppStatusErr_2_ZSL,
+			flag_ppStatusErr_0,
+			flag_ppStatusErr_1,
+			flag_ppStatusErr_2);
+	}
+
 	if (rc < 0)
 		return rc;
 	/* Bring up all the required GPIOs and Clocks */
@@ -4162,6 +4330,10 @@ static int vfe31_init(struct msm_vfe_callback *presp,
 	msm_camio_set_perf_lvl(S_PREVIEW);
 	if (msm_vpe_open() < 0)
 		CDBG("[CAM] %s: vpe_open failed\n", __func__);
+
+#ifdef BUS_RATE_DEBUG
+	INIT_WORK(&workq, vfe31_do_workqueue);
+#endif
 
 	/* TO DO: Need to release the VFE resources */
 	rc = request_irq(vfe31_ctrl->vfeirq, vfe31_parse_irq,

@@ -50,6 +50,9 @@
 #define REG_TEST_PATTERN_MODE			0x0601
 #define REG_VCM_NEW_CODE			0x30F2
 
+#define MT9D015_MIN_COARSE_INTEGRATION_TIME 1
+#define MT9D015_OFFSET 1
+
 /*============================================================================
 							 TYPE DECLARATIONS
 ============================================================================*/
@@ -129,7 +132,7 @@ static int mt9d015_i2c_rxdata(unsigned short saddr,
 		},
 	};
 	if (i2c_transfer(mt9d015_client->adapter, msgs, 2) < 0) {
-		CDBG("mt9d015_i2c_rxdata faild 0x%x\n", saddr);
+		CDBG("[CAM] mt9d015_i2c_rxdata faild 0x%x\n", saddr);
 		return -EIO;
 	}
 	return 0;
@@ -147,7 +150,7 @@ static int32_t mt9d015_i2c_txdata(unsigned short saddr,
 		 },
 	};
 	if (i2c_transfer(mt9d015_client->adapter, msg, 1) < 0) {
-		CDBG("mt9d015_i2c_txdata faild 0x%x\n", saddr);
+		CDBG("[CAM] mt9d015_i2c_txdata faild 0x%x\n", saddr);
 		return -EIO;
 	}
 
@@ -180,7 +183,7 @@ retry:
 		goto retry;
 	}
 	*rdata = (rlen == 2 ? buf[0] << 8 | buf[1] : buf[0]);
-	CDBG("mt9d015_i2c_read 0x%x val = 0x%x!\n", raddr, *rdata);
+	CDBG("[CAM] mt9d015_i2c_read 0x%x val = 0x%x!\n", raddr, *rdata);
 	return rc;
 }
 
@@ -409,10 +412,13 @@ static int32_t mt9d015_write_exp_gain(uint16_t gain, uint32_t line)
 	/* uint16_t max_legal_gain = 0x7F; */
 	uint32_t ll_ratio; /* Q10 */
 	uint32_t ll_pck, fl_lines;
-	uint16_t offset = 8;
+	uint32_t min_coarse = MT9D015_MIN_COARSE_INTEGRATION_TIME;
+	uint16_t offset = MT9D015_OFFSET;
 	int32_t rc = 0;
+	uint32_t fps_divider;
 
 	if (mt9d015_ctrl->sensormode == SENSOR_PREVIEW_MODE) {
+		fps_divider = mt9d015_ctrl->fps_divider;
 
 		mt9d015_ctrl->my_reg_gain = gain;
 		mt9d015_ctrl->my_reg_line_count = (uint16_t)line;
@@ -425,6 +431,8 @@ static int32_t mt9d015_write_exp_gain(uint16_t gain, uint32_t line)
 			ll_pck = mt9d015_regs.reg_snap[MT9D015_LINE_LENGTH_PCK].wdata;
 		}
 	} else {
+		fps_divider = mt9d015_ctrl->pict_fps_divider;
+
 		fl_lines = mt9d015_regs.reg_snap[MT9D015_FRAME_LENGTH_LINES].wdata;
 		ll_pck = mt9d015_regs.reg_snap[MT9D015_LINE_LENGTH_PCK].wdata;
 	}
@@ -434,28 +442,30 @@ static int32_t mt9d015_write_exp_gain(uint16_t gain, uint32_t line)
 		return rc;
 
 	if (gain > max_legal_gain) {
-		CDBG("Max legal gain Line:%d\n", __LINE__);
+		CDBG("[CAM] Max legal gain Line:%d\n", __LINE__);
 		gain = max_legal_gain;
 	}
 
 	/* in Q10 */
-	line = (line * 0x400);//mt9d015_ctrl->fps_divider);
+	line = (line * 0x400);/*mt9d015_ctrl->fps_divider);*/
 
-	CDBG("mt9d015_ctrl->fps_divider = %d\n", mt9d015_ctrl->fps_divider);
-	CDBG("fl_lines = %d\n", fl_lines);
-	CDBG("line = %d\n", line);
+	CDBG("[CAM] mt9d015_ctrl->fps_divider = %d\n", mt9d015_ctrl->fps_divider);
+	CDBG("[CAM] fl_lines = %d\n", fl_lines);
+	CDBG("[CAM] line = %d\n", line);
 
-	if ((fl_lines - offset) < (line / 0x400))
+	if ((fl_lines - offset) * fps_divider < line)
 		ll_ratio = (line / (fl_lines - offset));
 	else
-		ll_ratio = 0x400;
-	 CDBG("ll_ratio = %d\n", ll_ratio);
+		ll_ratio = fps_divider;
+	 CDBG("[CAM] ll_ratio = %d\n", ll_ratio);
 
-	ll_pck = ll_pck * ll_ratio / 0x400 * mt9d015_ctrl->fps_divider;
-	CDBG("ll_pck/0x400 = %d\n", ll_pck / 0x400);
+	ll_pck = ll_pck * ll_ratio;
+	CDBG("[CAM] ll_pck/0x400 = %d\n", ll_pck / 0x400);
 
 	line = line / ll_ratio;
-	CDBG("line = %d\n", line);
+	if (line < min_coarse)
+		line = min_coarse;
+	CDBG("[CAM] line = %d\n", line);
 
 #if 0
 	if (mt9d015_ctrl->sensormode == SENSOR_PREVIEW_MODE) {
@@ -498,7 +508,10 @@ static int32_t mt9d015_set_fps(struct fps_cfg   *fps)
 {
 	uint16_t total_lines_per_frame;
 	int32_t rc = 0;
-	uint32_t pre_fps = mt9d015_ctrl->fps_divider;
+	uint32_t delay;
+	uint32_t min_coarse = MT9D015_MIN_COARSE_INTEGRATION_TIME;
+	uint32_t pre_fps_divider = mt9d015_ctrl->fps_divider;
+	uint32_t pre_fps = mt9d015_ctrl->fps;
 	pr_info("[CAM]mt9d015_set_fps\n");
 	if (mt9d015_ctrl->sensormode == SENSOR_PREVIEW_MODE) {
 		total_lines_per_frame = (uint16_t)
@@ -511,12 +524,20 @@ static int32_t mt9d015_set_fps(struct fps_cfg   *fps)
 	}
 	mt9d015_ctrl->fps_divider = fps->fps_div;
 	mt9d015_ctrl->pict_fps_divider = fps->pict_fps_div;
+	mt9d015_ctrl->fps = fps->f_mult;
 
 	if (mt9d015_ctrl->sensormode == SENSOR_PREVIEW_MODE &&
-		(mt9d015_ctrl->my_reg_gain != 0 || mt9d015_ctrl->my_reg_line_count != 0)) {
+		(mt9d015_ctrl->my_reg_gain != 0 || mt9d015_ctrl->my_reg_line_count != 0) &&
+		(pre_fps != mt9d015_ctrl->fps || pre_fps_divider != mt9d015_ctrl->fps_divider)) {
+		min_coarse = (min_coarse * mt9d015_ctrl->fps_divider + 0x400 - 1) / 0x400;
+		if (mt9d015_ctrl->my_reg_line_count < min_coarse)
+			mt9d015_ctrl->my_reg_line_count = min_coarse;
 		rc =
 			mt9d015_write_exp_gain(mt9d015_ctrl->my_reg_gain,
-				mt9d015_ctrl->my_reg_line_count * pre_fps / mt9d015_ctrl->fps_divider);
+				mt9d015_ctrl->my_reg_line_count);
+
+		delay = (1000 * Q8 / pre_fps) + 1;
+		mdelay(delay);
 	}
 
 #if 0 /* Micro sensor reduse frame rate automatically by Shuji */
@@ -651,7 +672,7 @@ static int32_t mt9d015_sensor_setting(int update_type, int rt)
 	int32_t rc = 0;
 	struct msm_camera_csi_params mt9d015_csi_params;
 
-	CDBG("sensor_settings\n");
+	CDBG("[CAM] sensor_settings\n");
 #if 0
 	stored_af_step = mt9d015_ctrl->curr_step_pos;
 	mt9d015_set_default_focus(0);
@@ -826,7 +847,7 @@ static int mt9d015_vreg_disable(struct platform_device *pdev)
 {
 	struct msm_camera_sensor_info *sdata = pdev->dev.platform_data;
 	int rc;
-	printk(KERN_INFO "%s camera vreg off\n", __func__);
+	pr_info("[CAM] %s camera vreg off\n", __func__);
 	if (sdata->camera_power_off == NULL) {
 		pr_err("[CAM]sensor platform_data didnt register\n");
 		return -EIO;
@@ -838,7 +859,7 @@ static int mt9d015_vreg_disable(struct platform_device *pdev)
 
 static int mt9d015_probe_init_done(const struct msm_camera_sensor_info *data)
 {
-	CDBG("probe done\n");
+	CDBG("[CAM] probe done\n");
 	/*gpio_free(data->sensor_reset);*/
 	return 0;
 }
@@ -849,14 +870,14 @@ static int mt9d015_probe_init_sensor(const struct msm_camera_sensor_info *data)
 	uint16_t chipid = 0;
 	pr_info("[CAM] %s: %d\n", __func__, __LINE__);
 
-	if (!data)
-	{
+	if (!data) {
 		rc = -EINVAL;
 		pr_err("[CAM] %s: data = NULL\n", __func__);
 		return rc;
 	}
 
 	rc = gpio_request(data->sensor_reset, "mt9d015");
+
 	if (!rc) {
 		pr_info("[CAM] sensor_reset = %d\n", rc);
 		gpio_direction_output(data->sensor_reset, 0);
@@ -918,7 +939,7 @@ int mt9d015_sensor_open_init(struct msm_camera_sensor_info *data)
 	if (mt9d015_ctrl == NULL) {
 		mt9d015_ctrl = kzalloc(sizeof(struct mt9d015_ctrl_t), GFP_KERNEL);
 		if (!mt9d015_ctrl) {
-			CDBG("mt9d015_init failed!\n");
+			CDBG("[CAM] mt9d015_init failed!\n");
 			rc = -ENOMEM;
 			goto init_done;
 		}
@@ -926,6 +947,7 @@ int mt9d015_sensor_open_init(struct msm_camera_sensor_info *data)
 
 	mt9d015_ctrl->fps_divider = 1 * 0x00000400;
 	mt9d015_ctrl->pict_fps_divider = 1 * 0x00000400;
+	mt9d015_ctrl->fps = 30 * Q8;
 	mt9d015_ctrl->set_test = TEST_OFF;
 	mt9d015_ctrl->prev_res = QTR_SIZE;
 	mt9d015_ctrl->pict_res = FULL_SIZE;
@@ -934,8 +956,7 @@ int mt9d015_sensor_open_init(struct msm_camera_sensor_info *data)
 
 	if (data)
 		mt9d015_ctrl->sensordata = data;
-	else
-	{
+	else {
 		rc = -EINVAL;
 		pr_err("[CAM] Calling mt9d015_sensor_open_init fail for data = NULL\n");
 		return rc;
@@ -979,7 +1000,7 @@ retry:
 	pr_info("[CAM]%s msm_camio_probe_on()\n", __func__);
 	msm_camio_probe_on(mt9d015_pdev);
 
-	CDBG("%s: %d\n", __func__, __LINE__);
+	CDBG("[CAM] %s: %d\n", __func__, __LINE__);
 	/* enable mclk first */
 	msm_camio_clk_rate_set(MT9D015_MASTER_CLK_RATE);
 
@@ -1081,7 +1102,7 @@ static int mt9d015_i2c_probe(struct i2c_client *client,
 	return 0;
 
 probe_failure:
-	CDBG("mt9d015_probe failed! rc = %d\n", rc);
+	CDBG("[CAM] mt9d015_probe failed! rc = %d\n", rc);
 	return rc;
 }
 
@@ -1097,6 +1118,7 @@ static int __exit mt9d015_remove(struct i2c_client *client)
 	free_irq(client->irq, sensorw);
 	mt9d015_client = NULL;
 	kfree(sensorw);
+	sensorw = NULL;
 	return 0;
 }
 
@@ -1118,7 +1140,7 @@ int mt9d015_sensor_config(void __user *argp)
 		sizeof(struct sensor_cfg_data)))
 		return -EFAULT;
 	mutex_lock(&mt9d015_mut);
-	CDBG("mt9d015_sensor_config: cfgtype = %d\n",
+	CDBG("[CAM] mt9d015_sensor_config: cfgtype = %d\n",
 	cdata.cfgtype);
 		switch (cdata.cfgtype) {
 		case CFG_GET_PICT_FPS:
@@ -1274,7 +1296,9 @@ static int mt9d015_sensor_release(void)
 
 
 /*HTC_START Horng 20110905*/
+#ifdef CONFIG_MSM_CAMERA_8X60
 	msm_mipi_csi_disable();
+#endif
 /*HTC_END*/
 
 
@@ -1305,13 +1329,12 @@ static int mt9d015_sensor_release(void)
 	gpio_free(mt9d015_ctrl->sensordata->sensor_reset);
 
 #ifdef CONFIG_MSM_CAMERA_8X60
-	if (!sdata->power_down_disable) {
+	if (!sdata->power_down_disable)
 		mt9d015_vreg_disable(mt9d015_pdev);
-	}
 #endif
 	kfree(mt9d015_ctrl);
 	mt9d015_ctrl = NULL;
-	CDBG("mt9d015_release completed\n");
+	CDBG("[CAM] mt9d015_release completed\n");
 	mutex_unlock(&mt9d015_mut);
 
 	return rc;

@@ -241,6 +241,10 @@ struct phase_val_t {
 
 extern struct vpe_ctrl_type    *vpe_ctrl;
 
+#ifdef CONFIG_MACH_SHOOTER_U
+extern unsigned system_rev;
+#endif
+
 int msm_vpe_open(void);
 int msm_vpe_release(void);
 int msm_vpe_reg(struct msm_vpe_callback *presp);
@@ -248,8 +252,15 @@ void msm_send_frame_to_vpe(uint32_t pyaddr, uint32_t pcbcraddr,
 	struct timespec *ts, int output_id);
 int msm_vpe_config(struct msm_vpe_cfg_cmd *cmd, void *data);
 int msm_vpe_cfg_update(void *pinfo);
+
+#ifdef CONFIG_CAMERA_3D
 void msm_vpe_offset_update(int frame_pack, uint32_t pyaddr, uint32_t pcbcraddr,
+	struct timespec *ts, int output_id, struct msm_st_half st_half,
+	int frameid);
+#else
+	void msm_vpe_offset_update(int frame_pack, uint32_t pyaddr, uint32_t pcbcraddr,
 	struct timespec *ts, int output_id, int32_t x, int32_t y,
 	int32_t frameid, struct msm_st_crop stCropInfo);
+#endif
 #endif /*_msm_vpe1_h_*/
 

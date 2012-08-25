@@ -77,7 +77,7 @@
 #include <linux/android_pmem.h>
 /*#include <mach/msm_reqs.h>*/
 #ifdef CONFIG_MSM_CAMERA_7X30
-#include <mach/camera.h>
+#include <mach/camera-7x30.h>
 #elif defined(CONFIG_MSM_CAMERA_8X60)
 #include <mach/camera-8x60.h>
 #endif
