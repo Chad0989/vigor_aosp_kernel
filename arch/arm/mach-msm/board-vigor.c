@@ -3116,7 +3116,7 @@ static void __init msm8x60_init_dsps(void)
 /* SMI PMEM Region, as the video core will use offset address */
 /* from the Firmware base */
 #define KERNEL_SMI_BASE			 (MSM_SMI_BASE)
-#define KERNEL_SMI_SIZE			 0x400000
+#define KERNEL_SMI_SIZE			 0x1000000
 
 /* User space SMI PMEM Region for video core*/
 /* used for encoder, decoder input & output buffers  */
@@ -8043,7 +8043,7 @@ static void __init vigor_init(void)
 /* 0x40400000~0x42A00000 is 38MB for SF/AUDIO/FB PMEM */
 /* 0x48800000~0x7CC00000 is 836MB for APP */
 /* 0x7CC00000~0x80000000 is 52MB for ADSP PMEM */
-#define SIZE_ADDR1	  0x31C00000
+#define SIZE_ADDR1	  0x30C00000
 
 static void __init vigor_fixup(struct machine_desc *desc, struct tag *tags,
 				 char **cmdline, struct meminfo *mi)
