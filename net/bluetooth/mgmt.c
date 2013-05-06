@@ -2013,7 +2013,7 @@ static int set_rssi_reporter(struct sock *sk, u16 index,
 		return cmd_status(sk, index, MGMT_OP_SET_RSSI_REPORTER,
 							ENODEV);
 
-	hci_dev_lock_bh(hdev);
+	hci_dev_lock(hdev);
 
 	conn = hci_conn_hash_lookup_ba(hdev, LE_LINK, &cp->bdaddr);
 
@@ -2028,7 +2028,7 @@ static int set_rssi_reporter(struct sock *sk, u16 index,
 			__le16_to_cpu(cp->interval), cp->updateOnThreshExceed);
 
 failed:
-	hci_dev_unlock_bh(hdev);
+	hci_dev_unlock(hdev);
 	hci_dev_put(hdev);
 
 	return err;
@@ -2052,7 +2052,7 @@ static int unset_rssi_reporter(struct sock *sk, u16 index,
 		return cmd_status(sk, index, MGMT_OP_UNSET_RSSI_REPORTER,
 					ENODEV);
 
-	hci_dev_lock_bh(hdev);
+	hci_dev_lock(hdev);
 
 	conn = hci_conn_hash_lookup_ba(hdev, LE_LINK, &cp->bdaddr);
 
@@ -2065,7 +2065,7 @@ static int unset_rssi_reporter(struct sock *sk, u16 index,
 	hci_conn_unset_rssi_reporter(conn);
 
 failed:
-	hci_dev_unlock_bh(hdev);
+	hci_dev_unlock(hdev);
 	hci_dev_put(hdev);
 
 	return err;
@@ -3171,7 +3171,7 @@ void mgmt_read_rssi_complete(u16 index, s8 rssi, bdaddr_t *bdaddr,
 
 	if (conn->rssi_update_thresh_exceed == 1) {
 		BT_DBG("rssi_update_thresh_exceed == 1");
-		if (rssi > conn->rssi_threshold) {
+		if (rssi >= conn->rssi_threshold) {
 			memset(&ev, 0, sizeof(ev));
 			bacpy(&ev.bdaddr, bdaddr);
 			ev.rssi = rssi;
@@ -3184,7 +3184,7 @@ void mgmt_read_rssi_complete(u16 index, s8 rssi, bdaddr_t *bdaddr,
 		}
 	} else {
 		BT_DBG("rssi_update_thresh_exceed == 0");
-		if (rssi < conn->rssi_threshold) {
+		if (rssi <= conn->rssi_threshold) {
 			memset(&ev, 0, sizeof(ev));
 			bacpy(&ev.bdaddr, bdaddr);
 			ev.rssi = rssi;
